@@ -256,7 +256,7 @@ func TestCLISummaryFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	c := New(&stdout, &stderr)
 
-	code := c.Run([]string{"--summary", oldFile, newFile})
+	code := c.Run([]string{"--summary", "--no-color", oldFile, newFile})
 	if code != ExitCodeOK {
 		t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
 	}
