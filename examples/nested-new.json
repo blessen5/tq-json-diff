@@ -1,15 +1,22 @@
 {
-  "service": "auth-api",
-  "version": 2,
-  "config": {
-    "host": "0.0.0.0",
-    "port": 8080,
-    "debug": false,
-    "database": {
-      "name": "auth_prod",
-      "pool": 20,
-      "ssl": true
+  "user": {
+    "profile": {
+      "name": "John Doe",
+      "age": 29,
+      "contact": {
+        "email": "john.new@example.com"
+      },
+      "address": {
+        "city": "Bengaluru",
+        "country": "India"
+      }
+    },
+    "preferences": {
+      "theme": "dark",
+      "notifications": true
     }
   },
-  "tags": ["auth", "security"]
+  "metadata": {
+    "active": true
+  }
 }

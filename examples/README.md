@@ -1,6 +1,6 @@
 # jdiff Examples
 
-This directory contains sample JSON pairs demonstrating structural differences across various JSON data types.
+This directory contains sample JSON pairs demonstrating structural differences across various JSON data types and depths.
 
 ## Available Examples
 
@@ -15,21 +15,26 @@ jdiff examples/basic-old.json examples/basic-new.json
 
 Output:
 ```text
-MODIFIED:
-    age
-        - 19
-        + 20
+MODIFIED
+  age
+    - 19
+    + 20
 
-    city
-        - "Kochi"
-        + "Bengaluru"
+  city
+    - "Kochi"
+    + "Bengaluru"
 
-ADDED:
-    country
-        + "India"
+ADDED
+  country
+    + "India"
+
+Summary:
+  Added:     1
+  Removed:   0
+  Modified:  2
 ```
 
-### 2. Nested Hierarchy Changes
+### 2. Deeply Nested Object Changes
 - [`nested-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-old.json)
 - [`nested-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-new.json)
 
@@ -40,28 +45,29 @@ jdiff examples/nested-old.json examples/nested-new.json
 
 Output:
 ```text
-MODIFIED:
-    config.database.name
-        - "auth_dev"
-        + "auth_prod"
+MODIFIED
+  user.preferences.theme
+    - "light"
+    + "dark"
 
-    config.database.pool
-        - 5
-        + 20
+  user.profile.age
+    - 28
+    + 29
 
-    config.debug
-        - true
-        + false
+  user.profile.contact.email
+    - "john.old@example.com"
+    + "john.new@example.com"
 
-    config.host
-        - "localhost"
-        + "0.0.0.0"
+ADDED
+  user.profile.address
+    + {"city":"Bengaluru","country":"India"}
 
-    version
-        - 1
-        + 2
+REMOVED
+  user.profile.contact.phone
+    - "+1-555-0100"
 
-ADDED:
-    config.database.ssl
-        + true
+Summary:
+  Added:     1
+  Removed:   1
+  Modified:  3
 ```

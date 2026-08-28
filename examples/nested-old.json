@@ -1,14 +1,19 @@
 {
-  "service": "auth-api",
-  "version": 1,
-  "config": {
-    "host": "localhost",
-    "port": 8080,
-    "debug": true,
-    "database": {
-      "name": "auth_dev",
-      "pool": 5
+  "user": {
+    "profile": {
+      "name": "John Doe",
+      "age": 28,
+      "contact": {
+        "email": "john.old@example.com",
+        "phone": "+1-555-0100"
+      }
+    },
+    "preferences": {
+      "theme": "light",
+      "notifications": true
     }
   },
-  "tags": ["auth", "security"]
+  "metadata": {
+    "active": true
+  }
 }

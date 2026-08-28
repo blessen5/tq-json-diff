@@ -63,8 +63,8 @@ func TestBinaryVersionFlag(t *testing.T) {
 	}
 
 	out := strings.TrimSpace(stdout.String())
-	if out != "jdiff v0.2.0" {
-		t.Errorf("expected stdout to be 'jdiff v0.2.0', got: %q", out)
+	if out != "jdiff v0.3.0" {
+		t.Errorf("expected stdout to be 'jdiff v0.3.0', got: %q", out)
 	}
 }
 
@@ -90,15 +90,20 @@ func TestBinaryDiffExecution(t *testing.T) {
 	newFile := filepath.Join(tmpDir, "new.json")
 
 	oldJSON := `{
-		"name": "Blessen",
-		"age": 19,
-		"city": "Kochi"
+		"user": {
+			"profile": {
+				"name": "John",
+				"phone": "123456789"
+			}
+		}
 	}`
 	newJSON := `{
-		"name": "Blessen",
-		"age": 20,
-		"city": "Bengaluru",
-		"country": "India"
+		"user": {
+			"profile": {
+				"name": "James",
+				"email": "james@example.com"
+			}
+		}
 	}`
 
 	if err := os.WriteFile(oldFile, []byte(oldJSON), 0644); err != nil {
@@ -119,16 +124,44 @@ func TestBinaryDiffExecution(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "MODIFIED:\n    age\n        - 19\n        + 20") {
-		t.Errorf("expected age modification in output, got:\n%s", out)
+	if !strings.Contains(out, "MODIFIED\n  user.profile.name\n    - \"John\"\n    + \"James\"") {
+		t.Errorf("expected user.profile.name modification in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "city\n        - \"Kochi\"\n        + \"Bengaluru\"") {
-		t.Errorf("expected city modification in output, got:\n%s", out)
+	if !strings.Contains(out, "ADDED\n  user.profile.email\n    + \"james@example.com\"") {
+		t.Errorf("expected user.profile.email added in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "ADDED:\n    country\n        + \"India\"") {
-		t.Errorf("expected country added in output, got:\n%s", out)
+	if !strings.Contains(out, "REMOVED\n  user.profile.phone\n    - \"123456789\"") {
+		t.Errorf("expected user.profile.phone removed in output, got:\n%s", out)
 	}
-	if strings.Contains(out, "name") {
-		t.Errorf("unchanged field 'name' should not be present in output, got:\n%s", out)
+	if !strings.Contains(out, "Summary:\n  Added:     1\n  Removed:   1\n  Modified:  1") {
+		t.Errorf("expected summary block in output, got:\n%s", out)
+	}
+}
+
+func TestBinaryIdenticalDocuments(t *testing.T) {
+	tmpDir := t.TempDir()
+	f1 := filepath.Join(tmpDir, "f1.json")
+	f2 := filepath.Join(tmpDir, "f2.json")
+
+	content := `{"service": "auth", "version": 1}`
+	if err := os.WriteFile(f1, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f2, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, f1, f2)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		t.Fatalf("expected binary to exit 0 for identical docs, got error: %v, stderr: %s", err, stderr.String())
+	}
+
+	if strings.TrimSpace(stdout.String()) != "No differences found." {
+		t.Errorf("expected 'No differences found.', got: %q", stdout.String())
 	}
 }
