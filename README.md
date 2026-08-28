@@ -1,65 +1,87 @@
 # jdiff
 
-A fast, lightweight command-line tool built in Go that compares two JSON documents, clearly displays differences across multiple presentation formats, generates RFC 6902-compliant JSON Patch documents, and provides configurable performance and resource controls.
+[![Go Version](https://img.shields.io/badge/go-1.20%2B-blue.svg)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/blessen5/tq-son-diff)
 
-**Current Version:** `v0.9.0`
+A fast, lightweight, zero-dependency command-line utility built in Go that compares two JSON documents, clearly displays structural differences across multiple presentation formats, generates RFC 6902-compliant JSON Patch documents, and provides configurable performance and resource controls.
+
+**Current Version:** `v1.0.0`
+
+---
 
 ## Features
 
-- **Performance & Memory Metrics (`--stats`)**: Measures precise parse times, comparison times, memory allocation, and input sizes.
-- **Configurable Resource Controls**: Protect against oversized inputs with `--max-file-size` and cap difference collection with `--max-changes`.
-- **Automation & CI/CD Modes**: `--quiet` and `--exit-on-diff` with standardized, script-friendly exit codes (`0`, `1`, `2`).
-- **JSON Patch Generation (RFC 6902 subset)**: Generates valid JSON Patch documents with `add`, `remove`, and `replace` operations via `--output patch`.
-- **In-Memory Patch Application (`jdiff apply`)**: Apply a JSON Patch document to an input JSON file and stream the resulting document.
-- **Patch Verification (`--verify-patch`)**: Atomically diffs, generates a patch, applies it in memory, and verifies that the patched document matches the target.
-- **RFC 6901 JSON Pointer Paths**: Correctly encodes and decodes JSON Pointer path tokens, including `~0` and `~1` special character escaping.
+- **Deep Structural JSON Diff**: Recursively compares arbitrary nested objects and arrays with granular path reporting (`user.profile.name`, `tags[2]`).
 - **Multiple Output Formats**:
-  - **`human` (default)**: Colorized, human-readable terminal output.
-  - **`json`**: Strict, machine-readable JSON output with summary metrics and delta objects.
-  - **`unified`**: Unified diff representation (`@@ <path>`).
-  - **`patch`**: RFC 6902 JSON Patch document.
-- **Selective JSON Comparison & Ignore Rules**: Ignore dynamic fields via CLI `--ignore` flags or `.jdiff.json` configuration files with wildcard support (`*`, `[*]`).
-- **Zero External Dependencies**: Implemented entirely with the Go standard library.
+  - **`human` (default)**: Colorized, developer-friendly terminal diff.
+  - **`json`**: Machine-readable JSON summary and delta stream.
+  - **`unified`**: Unified patch representation (`@@ <path>`).
+  - **`patch`**: RFC 6902 JSON Patch document (`add`, `remove`, `replace`).
+- **In-Memory JSON Patch Application & Verification**:
+  - `jdiff apply <patch.json> <input.json>` applies changes atomically.
+  - `--verify-patch` validates round-trip equivalence in memory.
+- **Resource Safeguards & Security**:
+  - `--max-file-size`: Bounded file size protection (`B`, `KB`, `MB`, `GB`).
+  - `--max-changes`: Caps difference collection to prevent runaway output.
+  - `--max-depth`: Protects against stack exhaustion on hostile/deep recursion.
+- **Selective Comparison & Ignore Rules**: Filter out timestamps and ephemeral fields via CLI `--ignore` or `.jdiff.json` configuration files with wildcard support (`*`, `[*]`).
+- **Automation & Scripting**: `--quiet` and `--exit-on-diff` with standardized exit codes (`0`, `1`, `2`).
+- **Zero External Dependencies**: Built entirely with Go standard library packages.
 
-## Installation
+---
 
-### From Source
+## Quick Start
+
+### Installation
 
 ```bash
+# Install directly via Go
 go install ./cmd/jdiff
-```
 
-Or build locally:
-
-```bash
+# Or build locally
 go build -o jdiff .
 ```
 
-## Usage
+### Basic Comparison
 
 ```bash
-# Compare two JSON documents
-jdiff [options] <old.json> <new.json>
+# Compare two JSON files
+jdiff old.json new.json
 
-# Apply a JSON Patch document
-jdiff apply [options] <patch.json> <input.json>
+# Machine-readable JSON output
+jdiff --output json old.json new.json
+
+# Generate RFC 6902 JSON Patch
+jdiff --output patch old.json new.json
+
+# Apply a generated patch
+jdiff apply diff.patch.json old.json
 ```
 
-### Options & Flags
+---
+
+## CLI Options & Flags
+
+```text
+jdiff [options] <old.json> <new.json>
+jdiff apply [options] <patch.json> <input.json>
+```
 
 | Flag | Description |
 |---|---|
 | `--help`, `-h` | Display usage and available options |
-| `--version`, `-v` | Display application version (`jdiff v0.9.0`) |
+| `--version`, `-v` | Display application version (`jdiff v1.0.0`) |
 | `--output <format>` | Select output format: `human` (default), `json`, `unified`, `patch` |
 | `--output-file <file>` | Write diff/patch output directly to a file |
 | `--stats` | Display performance, timing, and memory allocation metrics |
 | `--max-file-size <size>` | Maximum allowed input file size (e.g. `100MB`, `10KB`, `500B`) |
 | `--max-changes <N>` | Maximum number of differences to collect before truncating |
+| `--max-depth <N>` | Maximum allowed JSON recursion depth (default: `1000`) |
 | `--exit-on-diff` | Terminate comparison immediately upon discovering differences |
 | `--quiet`, `-q` | Suppress output and communicate exclusively via exit codes |
 | `--verify-patch` | Generate, apply, and verify the patch in memory |
-| `--ignore <path>` | Ignore a JSON path or pattern (repeatable) |
+| `--ignore <path>` | Ignore a JSON path or wildcard pattern (repeatable) |
 | `--config <file>` | Use a configuration file (defaults to `.jdiff.json`) |
 | `--show-config` | Display active ignore configuration and exit |
 | `--no-color` | Disable ANSI terminal color escape sequences |
@@ -69,7 +91,7 @@ jdiff apply [options] <patch.json> <input.json>
 
 ---
 
-## Exit Codes & Automation
+## Standardized Exit Codes
 
 | Code | Meaning |
 |---|---|
@@ -77,24 +99,27 @@ jdiff apply [options] <patch.json> <input.json>
 | `1` | Differences detected between documents |
 | `2` | Operational, parsing, I/O, or resource limit error |
 
-### CI/CD Example
+### Automation / CI/CD Example
 ```bash
 if jdiff --quiet config.prod.json config.staging.json; then
     echo "Configurations match."
 else
-    echo "Configurations differ! Review changes before deploying."
+    echo "Configurations differ! Review changes before deployment."
 fi
 ```
 
 ---
 
-## Performance Benchmarking
+## Documentation
 
-Run the benchmark suite:
+- [Architecture Overview](docs/architecture.md)
+- [Configuration & Ignore Rules](docs/configuration.md)
+- [Output Formats & JSON Schema](docs/output-formats.md)
+- [JSON Patch (RFC 6902) Guide](docs/json-patch.md)
+- [Performance & Resource Controls](docs/performance.md)
+- [Development, Testing & Fuzzing Guide](docs/development.md)
 
-```bash
-go test -bench=. ./...
-```
+---
 
 ## Roadmap
 
@@ -107,6 +132,9 @@ go test -bench=. ./...
 - [x] **v0.7.0**: Multiple output formats (`human`, `json`, `unified`), `--output-file`, and standard input (`-`) piping.
 - [x] **v0.8.0**: JSON Patch generation (RFC 6902), patch application (`jdiff apply`), and verification (`--verify-patch`).
 - [x] **v0.9.0**: Performance metrics (`--stats`), resource controls (`--max-file-size`, `--max-changes`), `--exit-on-diff`, `--quiet`, and benchmarks.
+- [x] **v1.0.0**: Production-ready stable release, deep nesting protection (`--max-depth`), native Go fuzz testing, property invariants, and architecture documentation.
+
+---
 
 ## License
 
