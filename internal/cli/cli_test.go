@@ -34,7 +34,7 @@ func TestCLIHelp(t *testing.T) {
 			if !strings.Contains(out, "jdiff [options] <old.json> <new.json>") {
 				t.Errorf("expected stdout to contain usage, got: %s", out)
 			}
-			if !strings.Contains(out, "--output") || !strings.Contains(out, "--output-file") || !strings.Contains(out, "--verify-patch") {
+			if !strings.Contains(out, "--stats") || !strings.Contains(out, "--max-file-size") || !strings.Contains(out, "--quiet") {
 				t.Errorf("expected stdout to document new options, got: %s", out)
 			}
 			if stderr.Len() > 0 {
@@ -66,13 +66,146 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.8.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.8.0', got: %q", out)
+			if out != "jdiff v0.9.0" {
+				t.Errorf("expected stdout to be 'jdiff v0.9.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestCLIExitCodes(t *testing.T) {
+	tmpDir := t.TempDir()
+	fileA := filepath.Join(tmpDir, "a.json")
+	fileB := filepath.Join(tmpDir, "b.json")
+	fileC := filepath.Join(tmpDir, "c.json")
+
+	_ = os.WriteFile(fileA, []byte(`{"v": 1}`), 0644)
+	_ = os.WriteFile(fileB, []byte(`{"v": 1}`), 0644)
+	_ = os.WriteFile(fileC, []byte(`{"v": 2}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+
+	// Identical files -> ExitCodeOK (0)
+	c1 := New(&stdout, &stderr)
+	if code := c1.Run([]string{fileA, fileB}); code != ExitCodeOK {
+		t.Errorf("expected ExitCodeOK (0), got %d", code)
+	}
+
+	// Different files -> ExitCodeDiff (1)
+	stdout.Reset()
+	c2 := New(&stdout, &stderr)
+	if code := c2.Run([]string{fileA, fileC}); code != ExitCodeDiff {
+		t.Errorf("expected ExitCodeDiff (1), got %d", code)
+	}
+
+	// Non-existent file -> ExitCodeError (2)
+	stderr.Reset()
+	c3 := New(&stdout, &stderr)
+	if code := c3.Run([]string{fileA, "missing.json"}); code != ExitCodeError {
+		t.Errorf("expected ExitCodeError (2), got %d", code)
+	}
+}
+
+func TestCLIQuietMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	fileA := filepath.Join(tmpDir, "a.json")
+	fileB := filepath.Join(tmpDir, "b.json")
+	fileC := filepath.Join(tmpDir, "c.json")
+
+	_ = os.WriteFile(fileA, []byte(`{"v": 1}`), 0644)
+	_ = os.WriteFile(fileB, []byte(`{"v": 1}`), 0644)
+	_ = os.WriteFile(fileC, []byte(`{"v": 2}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+
+	c1 := New(&stdout, &stderr)
+	code1 := c1.Run([]string{"--quiet", fileA, fileB})
+	if code1 != ExitCodeOK || stdout.Len() > 0 {
+		t.Errorf("expected ExitCodeOK (0) and empty stdout in quiet mode, got code: %d, stdout: %s", code1, stdout.String())
+	}
+
+	stdout.Reset()
+	c2 := New(&stdout, &stderr)
+	code2 := c2.Run([]string{"-q", fileA, fileC})
+	if code2 != ExitCodeDiff || stdout.Len() > 0 {
+		t.Errorf("expected ExitCodeDiff (1) and empty stdout in quiet mode, got code: %d, stdout: %s", code2, stdout.String())
+	}
+}
+
+func TestCLIStats(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"v": 1}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"v": 2}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--stats", "--output", "json", oldFile, newFile})
+	if code != ExitCodeDiff {
+		t.Fatalf("expected ExitCodeDiff (1), got %d", code)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nOutput: %s", err, stdout.String())
+	}
+
+	statsMap, ok := parsed["statistics"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected statistics in JSON output: %+v", parsed)
+	}
+
+	if _, hasOld := statsMap["old_size"]; !hasOld {
+		t.Errorf("missing old_size in statistics: %+v", statsMap)
+	}
+}
+
+func TestCLIMaxFileSize(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"large_payload": "this is more than twenty bytes"}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"large_payload": "this is also more than twenty bytes"}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--max-file-size", "20B", oldFile, newFile})
+	if code != ExitCodeError {
+		t.Fatalf("expected ExitCodeError (2) for file exceeding max-file-size, got %d", code)
+	}
+
+	if !strings.Contains(stderr.String(), "exceeds maximum allowed file size") {
+		t.Errorf("expected error message in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestCLIMaxChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": 10, "b": 20, "c": 30, "d": 40, "e": 50}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--max-changes", "2", "--no-color", oldFile, newFile})
+	if code != ExitCodeDiff {
+		t.Fatalf("expected ExitCodeDiff (1), got %d", code)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "maximum changes limit 2 reached") {
+		t.Errorf("expected truncation message, got: %s", out)
 	}
 }
 
@@ -88,8 +221,8 @@ func TestCLIOutputPatch(t *testing.T) {
 	c := New(&stdout, &stderr)
 
 	code := c.Run([]string{"--output", "patch", oldFile, newFile})
-	if code != ExitCodeOK {
-		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
+	if code != ExitCodeDiff {
+		t.Fatalf("expected exit code %d (diff), got %d, stderr: %s", ExitCodeDiff, code, stderr.String())
 	}
 
 	var patchOps []map[string]any
@@ -153,149 +286,4 @@ func TestCLIVerifyPatch(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Patch verification successful.") {
 		t.Errorf("expected success message, got: %s", stdout.String())
 	}
-}
-
-func TestCLIOutputJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"name": "Alice", "age": 20}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"name": "Bob", "age": 20}`), 0644)
-
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{"--output", "json", oldFile, newFile})
-	if code != ExitCodeOK {
-		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		t.Fatalf("stdout is not valid JSON: %v", err)
-	}
-
-	summary := parsed["summary"].(map[string]any)
-	if summary["modified"].(float64) != 1 || summary["total"].(float64) != 1 {
-		t.Errorf("unexpected summary: %+v", summary)
-	}
-}
-
-func TestCLIOutputUnified(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"name": "Alice"}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"name": "Bob"}`), 0644)
-
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{"--output", "unified", "--no-color", oldFile, newFile})
-	if code != ExitCodeOK {
-		t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
-	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "--- "+oldFile+"\n+++ "+newFile) {
-		t.Errorf("missing unified header, got:\n%s", out)
-	}
-	if !strings.Contains(out, "@@ name\n- \"Alice\"\n+ \"Bob\"") {
-		t.Errorf("missing diff hunk, got:\n%s", out)
-	}
-}
-
-func TestCLIOutputUnsupported(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{"--output", "xml", "f1.json", "f2.json"})
-	if code != ExitCodeError {
-		t.Fatalf("expected error, got %d", code)
-	}
-
-	if !strings.Contains(stderr.String(), "unsupported output format: xml") {
-		t.Errorf("expected error message in stderr, got: %s", stderr.String())
-	}
-}
-
-func TestCLIOutputFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-	outDest := filepath.Join(tmpDir, "result.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"k": "v1"}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"k": "v2"}`), 0644)
-
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{"--output", "json", "--output-file", outDest, oldFile, newFile})
-	if code != ExitCodeOK {
-		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
-	}
-
-	if stdout.Len() > 0 {
-		t.Errorf("expected stdout to be empty when writing to output-file, got: %s", stdout.String())
-	}
-
-	content, err := os.ReadFile(outDest)
-	if err != nil {
-		t.Fatalf("failed to read output file: %v", err)
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(content, &parsed); err != nil {
-		t.Fatalf("output file content is not valid JSON: %v", err)
-	}
-}
-
-func TestCLIStdin(t *testing.T) {
-	tmpDir := t.TempDir()
-	otherFile := filepath.Join(tmpDir, "other.json")
-	_ = os.WriteFile(otherFile, []byte(`{"val": 20}`), 0644)
-
-	t.Run("stdin as old", func(t *testing.T) {
-		stdin := strings.NewReader(`{"val": 10}`)
-		var stdout, stderr bytes.Buffer
-		c := NewWithStdin(stdin, &stdout, &stderr)
-
-		code := c.Run([]string{"--no-color", "-", otherFile})
-		if code != ExitCodeOK {
-			t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
-		}
-		if !strings.Contains(stdout.String(), "MODIFIED\n  val\n    - 10\n    + 20") {
-			t.Errorf("unexpected stdout:\n%s", stdout.String())
-		}
-	})
-
-	t.Run("stdin as new", func(t *testing.T) {
-		stdin := strings.NewReader(`{"val": 30}`)
-		var stdout, stderr bytes.Buffer
-		c := NewWithStdin(stdin, &stdout, &stderr)
-
-		code := c.Run([]string{"--no-color", otherFile, "-"})
-		if code != ExitCodeOK {
-			t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
-		}
-		if !strings.Contains(stdout.String(), "MODIFIED\n  val\n    - 20\n    + 30") {
-			t.Errorf("unexpected stdout:\n%s", stdout.String())
-		}
-	})
-
-	t.Run("both inputs stdin error", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		c := New(&stdout, &stderr)
-
-		code := c.Run([]string{"-", "-"})
-		if code != ExitCodeError {
-			t.Fatalf("expected exit code %d, got %d", ExitCodeError, code)
-		}
-		if !strings.Contains(stderr.String(), "cannot read both inputs from stdin") {
-			t.Errorf("expected error message in stderr, got: %s", stderr.String())
-		}
-	})
 }

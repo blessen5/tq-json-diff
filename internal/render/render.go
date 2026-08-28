@@ -8,6 +8,7 @@ import (
 
 	"jdiff/internal/diff"
 	"jdiff/internal/patch"
+	"jdiff/internal/stats"
 )
 
 // ANSI color escape sequences.
@@ -60,6 +61,7 @@ type Options struct {
 	OldPath      string
 	NewPath      string
 	IgnoredRules []string
+	Stats        *stats.Stats
 }
 
 // Render formats a DiffResult to the provided writer according to Options.
@@ -97,40 +99,49 @@ func renderJSON(w io.Writer, result *diff.DiffResult, opts Options) error {
 		"ignored":  summary.Ignored,
 		"total":    summary.Total(),
 	}
-
-	if opts.SummaryOnly {
-		payload := map[string]any{
-			"summary": jsonSummary,
-		}
-		data, err := json.MarshalIndent(payload, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(w, string(data))
-		return err
-	}
-
-	changesList := make([]map[string]any, 0, len(result.Changes))
-	for _, c := range result.Changes {
-		m := map[string]any{
-			"path": c.Path.String(),
-			"type": strings.ToLower(string(c.Type)),
-		}
-		switch c.Type {
-		case diff.ChangeModified:
-			m["old"] = c.OldValue
-			m["new"] = c.NewValue
-		case diff.ChangeAdded:
-			m["new"] = c.NewValue
-		case diff.ChangeRemoved:
-			m["old"] = c.OldValue
-		}
-		changesList = append(changesList, m)
+	if summary.Truncated {
+		jsonSummary["truncated"] = true
+		jsonSummary["max_changes"] = summary.MaxChanges
 	}
 
 	payload := map[string]any{
 		"summary": jsonSummary,
-		"changes": changesList,
+	}
+
+	if !opts.SummaryOnly {
+		changesList := make([]map[string]any, 0, len(result.Changes))
+		for _, c := range result.Changes {
+			m := map[string]any{
+				"path": c.Path.String(),
+				"type": strings.ToLower(string(c.Type)),
+			}
+			switch c.Type {
+			case diff.ChangeModified:
+				m["old"] = c.OldValue
+				m["new"] = c.NewValue
+			case diff.ChangeAdded:
+				m["new"] = c.NewValue
+			case diff.ChangeRemoved:
+				m["old"] = c.OldValue
+			}
+			changesList = append(changesList, m)
+		}
+		payload["changes"] = changesList
+	}
+
+	if opts.Stats != nil {
+		statMap := map[string]any{
+			"old_size":        opts.Stats.OldSize,
+			"new_size":        opts.Stats.NewSize,
+			"old_is_stdin":    opts.Stats.OldIsStdin,
+			"new_is_stdin":    opts.Stats.NewIsStdin,
+			"parse_time_ms":   opts.Stats.ParseTime.Milliseconds(),
+			"compare_time_ms": opts.Stats.CompareTime.Milliseconds(),
+			"total_time_ms":   opts.Stats.TotalTime.Milliseconds(),
+			"alloc_bytes":     opts.Stats.AllocBytes,
+			"changes_count":   opts.Stats.ChangesCount,
+		}
+		payload["statistics"] = statMap
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -193,6 +204,10 @@ func renderUnified(w io.Writer, result *diff.DiffResult, opts Options) error {
 		}
 	}
 
+	if result.Truncated {
+		sb.WriteString(fmt.Sprintf("\n[Diff output truncated: maximum changes limit %d reached]\n", result.MaxChanges))
+	}
+
 	_, err := fmt.Fprint(w, sb.String())
 	return err
 }
@@ -210,7 +225,13 @@ func renderHuman(w io.Writer, result *diff.DiffResult, opts Options) error {
 			renderVerboseHeader(w, opts)
 		}
 		_, err := fmt.Fprintln(w, "No differences found.")
-		return err
+		if err != nil {
+			return err
+		}
+		if opts.Stats != nil {
+			renderStats(w, opts.Stats, opts.Color)
+		}
+		return nil
 	}
 
 	var sb strings.Builder
@@ -232,8 +253,20 @@ func renderHuman(w io.Writer, result *diff.DiffResult, opts Options) error {
 	// Summary Footer
 	renderSummaryFooterToString(&sb, result, opts)
 
+	if result.Truncated {
+		sb.WriteString(fmt.Sprintf("[Diff output truncated: maximum changes limit %d reached]\n", result.MaxChanges))
+	}
+
 	_, err := fmt.Fprint(w, sb.String())
-	return err
+	if err != nil {
+		return err
+	}
+
+	if opts.Stats != nil {
+		renderStats(w, opts.Stats, opts.Color)
+	}
+
+	return nil
 }
 
 func renderVerboseHeader(w io.Writer, opts Options) {
@@ -395,7 +428,46 @@ func renderSummaryOnly(w io.Writer, result *diff.DiffResult, opts Options) error
 		sb.WriteString(fmt.Sprintf("Ignored:   %d\n", summary.Ignored))
 	}
 	sb.WriteString(fmt.Sprintf("Total:     %d\n", summary.Total()))
+	if summary.Truncated {
+		sb.WriteString(fmt.Sprintf("[Diff output truncated: maximum changes limit %d reached]\n", summary.MaxChanges))
+	}
 
 	_, err := fmt.Fprint(w, sb.String())
-	return err
+	if err != nil {
+		return err
+	}
+
+	if opts.Stats != nil {
+		renderStats(w, opts.Stats, opts.Color)
+	}
+
+	return nil
+}
+
+func renderStats(w io.Writer, s *stats.Stats, color bool) {
+	title := "Comparison Statistics"
+	if color {
+		title = colorBold + title + colorReset
+	}
+
+	oldStr := stats.FormatBytes(s.OldSize)
+	if s.OldIsStdin {
+		oldStr = "stdin"
+	}
+	newStr := stats.FormatBytes(s.NewSize)
+	if s.NewIsStdin {
+		newStr = "stdin"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n" + title + "\n")
+	sb.WriteString(fmt.Sprintf("  Old size:      %s\n", oldStr))
+	sb.WriteString(fmt.Sprintf("  New size:      %s\n", newStr))
+	sb.WriteString(fmt.Sprintf("  Changes:       %d\n", s.ChangesCount))
+	sb.WriteString(fmt.Sprintf("  Parse time:    %s\n", s.ParseTime.Round(100*1000))) // microseconds / ms
+	sb.WriteString(fmt.Sprintf("  Compare time:  %s\n", s.CompareTime.Round(100*1000)))
+	sb.WriteString(fmt.Sprintf("  Total time:    %s\n", s.TotalTime.Round(100*1000)))
+	sb.WriteString(fmt.Sprintf("  Allocated:     %s\n", stats.FormatBytes(int64(s.AllocBytes))))
+
+	_, _ = fmt.Fprint(w, sb.String())
 }

@@ -6,21 +6,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"jdiff/internal/config"
 	"jdiff/internal/diff"
 	"jdiff/internal/matcher"
 	"jdiff/internal/patch"
 	"jdiff/internal/render"
+	"jdiff/internal/stats"
 	"jdiff/internal/version"
 )
 
 const (
-	// ExitCodeOK indicates successful execution.
+	// ExitCodeOK indicates successful execution with no differences detected.
 	ExitCodeOK = 0
-	// ExitCodeError indicates an error occurred during execution.
-	ExitCodeError = 1
+	// ExitCodeDiff indicates differences were detected.
+	ExitCodeDiff = 1
+	// ExitCodeError indicates an operational error, invalid argument, or resource limit violation.
+	ExitCodeError = 2
 )
 
 const usage = `jdiff - JSON Structural Diff
@@ -30,22 +36,27 @@ Usage:
   jdiff apply [options] <patch.json> <input.json>
 
 Options:
-  --help                Show help
-  --version             Show version
-  --output <format>     Output format: human, json, unified, patch (default: human)
-  --output-file <file>  Write output to a file instead of stdout
-  --verify-patch        Generate, apply, and verify the patch
-  --no-color            Disable colored output
-  --compact             Display compact diff output
-  --verbose             Display additional comparison information
-  --summary             Display only the change summary
-  --ignore <path>       Ignore a JSON path (can be specified multiple times)
-  --config <file>       Use a configuration file (defaults to .jdiff.json)
-  --show-config         Show active comparison configuration
+  --help                 Show help
+  --version              Show version
+  --output <format>      Output format: human, json, unified, patch (default: human)
+  --output-file <file>   Write output to a file instead of stdout
+  --verify-patch         Generate, apply, and verify the patch
+  --stats                Display performance and memory statistics
+  --max-file-size <size> Maximum allowed input file size (e.g. 100MB, 10KB, 500B)
+  --max-changes <N>      Maximum number of differences to collect before truncating
+  --exit-on-diff         Terminate comparison immediately upon discovering differences
+  --quiet, -q            Suppress output and communicate exclusively via exit codes
+  --no-color             Disable colored output
+  --compact              Display compact diff output
+  --verbose              Display additional comparison information
+  --summary              Display only the change summary
+  --ignore <path>        Ignore a JSON path (can be specified multiple times)
+  --config <file>        Use a configuration file (defaults to .jdiff.json)
+  --show-config          Show active comparison configuration
 
 Arguments:
-  <old.json>            Old JSON document (or - for stdin)
-  <new.json>            New JSON document (or - for stdin)
+  <old.json>             Old JSON document (or - for stdin)
+  <new.json>             New JSON document (or - for stdin)
 `
 
 // CLI manages command-line interface execution and I/O streams.
@@ -71,6 +82,8 @@ func NewWithStdin(stdin io.Reader, stdout, stderr io.Writer) *CLI {
 
 // Run parses arguments and executes the requested operation.
 func (c *CLI) Run(args []string) int {
+	totalStart := time.Now()
+
 	if len(args) > 0 && args[0] == "apply" {
 		return c.runApply(args[1:])
 	}
@@ -79,6 +92,11 @@ func (c *CLI) Run(args []string) int {
 		outputFormatStr string
 		outputFile      string
 		verifyPatch     bool
+		showStats       bool
+		maxFileSizeStr  string
+		maxChanges      int
+		exitOnDiff      bool
+		quiet           bool
 		noColor         bool
 		compact         bool
 		verbose         bool
@@ -125,6 +143,40 @@ func (c *CLI) Run(args []string) int {
 			outputFile = strings.TrimPrefix(arg, "--output-file=")
 		case arg == "--verify-patch":
 			verifyPatch = true
+		case arg == "--stats":
+			showStats = true
+		case arg == "--max-file-size":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --max-file-size")
+				return ExitCodeError
+			}
+			i++
+			maxFileSizeStr = args[i]
+		case strings.HasPrefix(arg, "--max-file-size="):
+			maxFileSizeStr = strings.TrimPrefix(arg, "--max-file-size=")
+		case arg == "--max-changes":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --max-changes")
+				return ExitCodeError
+			}
+			i++
+			val, err := strconv.Atoi(args[i])
+			if err != nil || val <= 0 {
+				fmt.Fprintf(c.stderr, "jdiff: invalid value for --max-changes: %q\n", args[i])
+				return ExitCodeError
+			}
+			maxChanges = val
+		case strings.HasPrefix(arg, "--max-changes="):
+			val, err := strconv.Atoi(strings.TrimPrefix(arg, "--max-changes="))
+			if err != nil || val <= 0 {
+				fmt.Fprintf(c.stderr, "jdiff: invalid value for --max-changes: %q\n", arg)
+				return ExitCodeError
+			}
+			maxChanges = val
+		case arg == "--exit-on-diff":
+			exitOnDiff = true
+		case arg == "--quiet" || arg == "-q":
+			quiet = true
 		case arg == "--no-color":
 			noColor = true
 		case arg == "--compact":
@@ -166,6 +218,17 @@ func (c *CLI) Run(args []string) int {
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: %v\n", err)
 		return ExitCodeError
+	}
+
+	// Parse max-file-size limit if specified
+	var maxFileSizeBytes int64
+	if maxFileSizeStr != "" {
+		parsedLimit, err := stats.ParseSize(maxFileSizeStr)
+		if err != nil {
+			fmt.Fprintf(c.stderr, "jdiff: invalid --max-file-size: %v\n", err)
+			return ExitCodeError
+		}
+		maxFileSizeBytes = parsedLimit
 	}
 
 	// Load configuration rules
@@ -234,24 +297,71 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
-	oldData, err := c.readInput(oldPath)
+	// Read input documents respecting max-file-size
+	oldData, err := c.readInputWithLimit(oldPath, maxFileSizeBytes)
 	if err != nil {
-		fmt.Fprintf(c.stderr, "jdiff: failed to read %s: %v\n", oldPath, err)
+		fmt.Fprintf(c.stderr, "jdiff: %s: %v\n", oldPath, err)
 		return ExitCodeError
 	}
 
-	newData, err := c.readInput(newPath)
+	newData, err := c.readInputWithLimit(newPath, maxFileSizeBytes)
 	if err != nil {
-		fmt.Fprintf(c.stderr, "jdiff: failed to read %s: %v\n", newPath, err)
+		fmt.Fprintf(c.stderr, "jdiff: %s: %v\n", newPath, err)
 		return ExitCodeError
 	}
 
+	var mStart runtime.MemStats
+	if showStats {
+		runtime.ReadMemStats(&mStart)
+	}
+
+	parseStart := time.Now()
+	var oldVal, newVal any
+	decOld := json.NewDecoder(bytes.NewReader(oldData))
+	decOld.UseNumber()
+	if err := decOld.Decode(&oldVal); err != nil {
+		fmt.Fprintf(c.stderr, "jdiff: failed to parse %s: %v\n", oldPath, err)
+		return ExitCodeError
+	}
+
+	decNew := json.NewDecoder(bytes.NewReader(newData))
+	decNew.UseNumber()
+	if err := decNew.Decode(&newVal); err != nil {
+		fmt.Fprintf(c.stderr, "jdiff: failed to parse %s: %v\n", newPath, err)
+		return ExitCodeError
+	}
+	parseDuration := time.Since(parseStart)
+
+	compareStart := time.Now()
 	diffResult, err := diff.CompareBytesWithOptions(oldData, newData, diff.Options{
-		Matcher: pathMatcher,
+		Matcher:    pathMatcher,
+		MaxChanges: maxChanges,
+		EarlyExit:  exitOnDiff,
 	})
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: %v\n", err)
 		return ExitCodeError
+	}
+	compareDuration := time.Since(compareStart)
+	totalDuration := time.Since(totalStart)
+
+	var statInfo *stats.Stats
+	if showStats {
+		var mEnd runtime.MemStats
+		runtime.ReadMemStats(&mEnd)
+
+		allocDiff := mEnd.TotalAlloc - mStart.TotalAlloc
+		statInfo = &stats.Stats{
+			OldSize:      int64(len(oldData)),
+			OldIsStdin:   oldPath == "-",
+			NewSize:      int64(len(newData)),
+			NewIsStdin:   newPath == "-",
+			ParseTime:    parseDuration,
+			CompareTime:  compareDuration,
+			TotalTime:    totalDuration,
+			AllocBytes:   allocDiff,
+			ChangesCount: len(diffResult.Changes),
+		}
 	}
 
 	// Handle --verify-patch
@@ -259,10 +369,22 @@ func (c *CLI) Run(args []string) int {
 		patchDoc := patch.Generate(diffResult)
 		ok, err := patch.Verify(oldData, newData, patchDoc)
 		if err != nil || !ok {
-			fmt.Fprintln(c.stdout, "Patch verification failed.")
-			return ExitCodeError
+			if !quiet {
+				fmt.Fprintln(c.stdout, "Patch verification failed.")
+			}
+			return ExitCodeDiff
 		}
-		fmt.Fprintln(c.stdout, "Patch verification successful.")
+		if !quiet {
+			fmt.Fprintln(c.stdout, "Patch verification successful.")
+		}
+		return ExitCodeOK
+	}
+
+	// Handle --quiet mode
+	if quiet {
+		if diffResult.HasChanges() {
+			return ExitCodeDiff
+		}
 		return ExitCodeOK
 	}
 
@@ -281,6 +403,15 @@ func (c *CLI) Run(args []string) int {
 		OldPath:      oldPath,
 		NewPath:      newPath,
 		IgnoredRules: activeRules,
+		Stats:        statInfo,
+	}
+
+	// Handle statistics routing when patch format is selected
+	if format == render.FormatPatch && showStats && statInfo != nil {
+		render.Render(c.stderr, diffResult, render.Options{
+			Format: render.FormatHuman,
+			Stats:  statInfo,
+		})
 	}
 
 	// Determine output destination writer
@@ -298,6 +429,10 @@ func (c *CLI) Run(args []string) int {
 	if err := render.Render(outWriter, diffResult, renderOpts); err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: render error: %v\n", err)
 		return ExitCodeError
+	}
+
+	if diffResult.HasChanges() {
+		return ExitCodeDiff
 	}
 
 	return ExitCodeOK
@@ -349,13 +484,13 @@ func (c *CLI) runApply(args []string) int {
 		return ExitCodeError
 	}
 
-	patchData, err := c.readInput(patchPath)
+	patchData, err := c.readInputWithLimit(patchPath, 0)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff apply: failed to read patch %s: %v\n", patchPath, err)
 		return ExitCodeError
 	}
 
-	inputData, err := c.readInput(inputPath)
+	inputData, err := c.readInputWithLimit(inputPath, 0)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff apply: failed to read input %s: %v\n", inputPath, err)
 		return ExitCodeError
@@ -402,12 +537,40 @@ func (c *CLI) runApply(args []string) int {
 	return ExitCodeOK
 }
 
-func (c *CLI) readInput(path string) ([]byte, error) {
+func (c *CLI) readInputWithLimit(path string, maxBytes int64) ([]byte, error) {
+	var r io.Reader
 	if path == "-" {
 		if c.stdin == nil {
 			return nil, fmt.Errorf("stdin not available")
 		}
-		return io.ReadAll(c.stdin)
+		r = c.stdin
+	} else {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+
+		if maxBytes > 0 {
+			info, err := f.Stat()
+			if err == nil && info.Size() > maxBytes {
+				return nil, fmt.Errorf("input exceeds maximum allowed file size (%s)", stats.FormatBytes(maxBytes))
+			}
+		}
+		r = f
 	}
-	return os.ReadFile(path)
+
+	if maxBytes > 0 {
+		lr := io.LimitReader(r, maxBytes+1)
+		data, err := io.ReadAll(lr)
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(data)) > maxBytes {
+			return nil, fmt.Errorf("input exceeds maximum allowed file size (%s)", stats.FormatBytes(maxBytes))
+		}
+		return data, nil
+	}
+
+	return io.ReadAll(r)
 }

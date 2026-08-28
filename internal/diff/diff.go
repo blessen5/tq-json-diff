@@ -73,10 +73,12 @@ type Change struct {
 
 // Summary encapsulates the total counts of detected changes.
 type Summary struct {
-	Added    int
-	Removed  int
-	Modified int
-	Ignored  int
+	Added      int
+	Removed    int
+	Modified   int
+	Ignored    int
+	Truncated  bool
+	MaxChanges int
 }
 
 // Total returns the total number of actual differences (Added + Removed + Modified).
@@ -86,8 +88,10 @@ func (s Summary) Total() int {
 
 // DiffResult holds all changes detected between two JSON documents.
 type DiffResult struct {
-	Changes []Change
-	Ignored int
+	Changes    []Change
+	Ignored    int
+	Truncated  bool
+	MaxChanges int
 }
 
 // HasChanges returns true if any differences were detected.
@@ -134,7 +138,9 @@ func (r *DiffResult) Summary() Summary {
 		return Summary{}
 	}
 	s := Summary{
-		Ignored: r.Ignored,
+		Ignored:    r.Ignored,
+		Truncated:  r.Truncated,
+		MaxChanges: r.MaxChanges,
 	}
 	for _, c := range r.Changes {
 		switch c.Type {
@@ -211,6 +217,9 @@ func (r *DiffResult) Format(w io.Writer) error {
 	if summary.Ignored > 0 {
 		sumSB.WriteString(fmt.Sprintf("\n  Ignored:   %d", summary.Ignored))
 	}
+	if summary.Truncated {
+		sumSB.WriteString(fmt.Sprintf("\n  Truncated: (max-changes limit %d reached)", summary.MaxChanges))
+	}
 	sections = append(sections, sumSB.String())
 
 	output := strings.Join(sections, "\n\n") + "\n"
@@ -232,7 +241,18 @@ type PathMatcher interface {
 
 // Options encapsulates optional configuration for the diff engine.
 type Options struct {
-	Matcher PathMatcher
+	Matcher    PathMatcher
+	MaxChanges int
+	EarlyExit  bool
+}
+
+type diffState struct {
+	matcher      PathMatcher
+	maxChanges   int
+	earlyExit    bool
+	changes      []Change
+	ignoredCount int
+	truncated    bool
 }
 
 // CompareBytes parses two JSON byte slices and computes their structural differences.
@@ -257,24 +277,57 @@ func CompareBytesWithOptions(oldJSON, newJSON []byte, opts Options) (*DiffResult
 		return nil, fmt.Errorf("new document: %w", err)
 	}
 
-	var ignoredCount int
-	changes := compare(NewPath(), oldVal, newVal, opts.Matcher, &ignoredCount)
-	sortChanges(changes)
-	return &DiffResult{Changes: changes, Ignored: ignoredCount}, nil
-}
-
-// compare recursively compares old and new JSON values and returns detected changes.
-func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *int) []Change {
-	// If the current path is ignored, calculate dry differences and skip emitting
-	if matcher != nil && matcher.Matches(path) {
-		dryChanges := compare(path, oldVal, newVal, nil, nil)
-		if ignoredCount != nil {
-			*ignoredCount += len(dryChanges)
-		}
-		return nil
+	state := &diffState{
+		matcher:    opts.Matcher,
+		maxChanges: opts.MaxChanges,
+		earlyExit:  opts.EarlyExit,
 	}
 
-	var changes []Change
+	state.compare(NewPath(), oldVal, newVal)
+	sortChanges(state.changes)
+
+	return &DiffResult{
+		Changes:    state.changes,
+		Ignored:    state.ignoredCount,
+		Truncated:  state.truncated,
+		MaxChanges: opts.MaxChanges,
+	}, nil
+}
+
+func (s *diffState) shouldStop() bool {
+	if s.earlyExit && len(s.changes) > 0 {
+		return true
+	}
+	if s.maxChanges > 0 && len(s.changes) >= s.maxChanges {
+		s.truncated = true
+		return true
+	}
+	return false
+}
+
+func (s *diffState) addChange(c Change) {
+	if s.shouldStop() {
+		return
+	}
+	s.changes = append(s.changes, c)
+	if s.maxChanges > 0 && len(s.changes) >= s.maxChanges {
+		s.truncated = true
+	}
+}
+
+// compare recursively compares old and new JSON values and collects detected changes.
+func (s *diffState) compare(path Path, oldVal, newVal any) {
+	if s.shouldStop() {
+		return
+	}
+
+	// If the current path is ignored, calculate dry differences and skip emitting
+	if s.matcher != nil && s.matcher.Matches(path) {
+		dryState := &diffState{}
+		dryState.compare(path, oldVal, newVal)
+		s.ignoredCount += len(dryState.changes)
+		return
+	}
 
 	oldType := DetectType(oldVal)
 	newType := DetectType(newVal)
@@ -300,25 +353,23 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 		sort.Strings(keys)
 
 		for _, k := range keys {
+			if s.shouldStop() {
+				return
+			}
 			childPath := path.AppendKey(k)
 
 			// Check ignore rule for child path
-			if matcher != nil && matcher.Matches(childPath) {
+			if s.matcher != nil && s.matcher.Matches(childPath) {
 				oldChild, inOld := oldMap[k]
 				newChild, inNew := newMap[k]
 				if inOld && !inNew {
-					if ignoredCount != nil {
-						*ignoredCount++
-					}
+					s.ignoredCount++
 				} else if !inOld && inNew {
-					if ignoredCount != nil {
-						*ignoredCount++
-					}
+					s.ignoredCount++
 				} else {
-					dry := compare(childPath, oldChild, newChild, nil, nil)
-					if ignoredCount != nil {
-						*ignoredCount += len(dry)
-					}
+					dryState := &diffState{}
+					dryState.compare(childPath, oldChild, newChild)
+					s.ignoredCount += len(dryState.changes)
 				}
 				continue
 			}
@@ -327,7 +378,7 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 			newChild, inNew := newMap[k]
 
 			if inOld && !inNew {
-				changes = append(changes, Change{
+				s.addChange(Change{
 					Path:     childPath,
 					Type:     ChangeRemoved,
 					OldValue: oldChild,
@@ -336,7 +387,7 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 					NewType:  JSONTypeNull,
 				})
 			} else if !inOld && inNew {
-				changes = append(changes, Change{
+				s.addChange(Change{
 					Path:     childPath,
 					Type:     ChangeAdded,
 					OldValue: nil,
@@ -345,11 +396,10 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 					NewType:  DetectType(newChild),
 				})
 			} else {
-				// Present in both - recurse deeply
-				changes = append(changes, compare(childPath, oldChild, newChild, matcher, ignoredCount)...)
+				s.compare(childPath, oldChild, newChild)
 			}
 		}
-		return changes
+		return
 	}
 
 	// Case 2: Both are slices/arrays
@@ -364,27 +414,30 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 
 		// 1. Compare common index range
 		for i := 0; i < minLen; i++ {
+			if s.shouldStop() {
+				return
+			}
 			indexPath := path.AppendIndex(i)
-			if matcher != nil && matcher.Matches(indexPath) {
-				dry := compare(indexPath, oldSlice[i], newSlice[i], nil, nil)
-				if ignoredCount != nil {
-					*ignoredCount += len(dry)
-				}
+			if s.matcher != nil && s.matcher.Matches(indexPath) {
+				dryState := &diffState{}
+				dryState.compare(indexPath, oldSlice[i], newSlice[i])
+				s.ignoredCount += len(dryState.changes)
 				continue
 			}
-			changes = append(changes, compare(indexPath, oldSlice[i], newSlice[i], matcher, ignoredCount)...)
+			s.compare(indexPath, oldSlice[i], newSlice[i])
 		}
 
 		// 2. Extra elements in old -> REMOVED
 		for i := minLen; i < len(oldSlice); i++ {
+			if s.shouldStop() {
+				return
+			}
 			indexPath := path.AppendIndex(i)
-			if matcher != nil && matcher.Matches(indexPath) {
-				if ignoredCount != nil {
-					*ignoredCount++
-				}
+			if s.matcher != nil && s.matcher.Matches(indexPath) {
+				s.ignoredCount++
 				continue
 			}
-			changes = append(changes, Change{
+			s.addChange(Change{
 				Path:     indexPath,
 				Type:     ChangeRemoved,
 				OldValue: oldSlice[i],
@@ -396,14 +449,15 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 
 		// 3. Extra elements in new -> ADDED
 		for i := minLen; i < len(newSlice); i++ {
+			if s.shouldStop() {
+				return
+			}
 			indexPath := path.AppendIndex(i)
-			if matcher != nil && matcher.Matches(indexPath) {
-				if ignoredCount != nil {
-					*ignoredCount++
-				}
+			if s.matcher != nil && s.matcher.Matches(indexPath) {
+				s.ignoredCount++
 				continue
 			}
-			changes = append(changes, Change{
+			s.addChange(Change{
 				Path:     indexPath,
 				Type:     ChangeAdded,
 				OldValue: nil,
@@ -413,12 +467,12 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 			})
 		}
 
-		return changes
+		return
 	}
 
 	// Case 3: Type mismatch
 	if oldType != newType {
-		changes = append(changes, Change{
+		s.addChange(Change{
 			Path:     path,
 			Type:     ChangeModified,
 			OldValue: oldVal,
@@ -426,12 +480,12 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 			OldType:  oldType,
 			NewType:  newType,
 		})
-		return changes
+		return
 	}
 
 	// Case 4: Primitive values with identical types
 	if !valuesEqual(oldVal, newVal) {
-		changes = append(changes, Change{
+		s.addChange(Change{
 			Path:     path,
 			Type:     ChangeModified,
 			OldValue: oldVal,
@@ -440,8 +494,6 @@ func compare(path Path, oldVal, newVal any, matcher PathMatcher, ignoredCount *i
 			NewType:  newType,
 		})
 	}
-
-	return changes
 }
 
 // sortChanges sorts a slice of changes deterministically by path and change type.
