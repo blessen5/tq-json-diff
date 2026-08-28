@@ -4,30 +4,46 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/blessen5/tq-son-diff)
 
-A fast, lightweight, zero-dependency command-line utility built in Go that compares two JSON documents, clearly displays structural differences across multiple presentation formats, generates RFC 6902-compliant JSON Patch documents, and provides configurable performance and resource controls.
-
-**Current Version:** `v1.0.0`
+A fast, lightweight, zero-dependency command-line utility and Go library that performs deep structural JSON comparison, semantic API breaking change analysis, intelligent identity-based array alignment, RFC 6902 JSON patch and rollback generation, and standalone interactive HTML diff reporting.
 
 ---
 
-## Features
+## Key Features
 
-- **Deep Structural JSON Diff**: Recursively compares arbitrary nested objects and arrays with granular path reporting (`user.profile.name`, `tags[2]`).
-- **Multiple Output Formats**:
-  - **`human` (default)**: Colorized, developer-friendly terminal diff.
-  - **`json`**: Machine-readable JSON summary and delta stream.
-  - **`unified`**: Unified patch representation (`@@ <path>`).
-  - **`patch`**: RFC 6902 JSON Patch document (`add`, `remove`, `replace`).
-- **In-Memory JSON Patch Application & Verification**:
-  - `jdiff apply <patch.json> <input.json>` applies changes atomically.
-  - `--verify-patch` validates round-trip equivalence in memory.
-- **Resource Safeguards & Security**:
-  - `--max-file-size`: Bounded file size protection (`B`, `KB`, `MB`, `GB`).
-  - `--max-changes`: Caps difference collection to prevent runaway output.
-  - `--max-depth`: Protects against stack exhaustion on hostile/deep recursion.
-- **Selective Comparison & Ignore Rules**: Filter out timestamps and ephemeral fields via CLI `--ignore` or `.jdiff.json` configuration files with wildcard support (`*`, `[*]`).
-- **Automation & Scripting**: `--quiet` and `--exit-on-diff` with standardized exit codes (`0`, `1`, `2`).
-- **Zero External Dependencies**: Built entirely with Go standard library packages.
+### 🛡️ Semantic Schema & Breaking Change Analyzer
+- Categorizes changes into **`[BREAKING]`** (removed fields, mutated data types), **`[ADDITIVE]`** (backward-compatible additions), and **`[VALUE_CHANGE]`** (safe value updates).
+- **`--check-breaking`**: CI/CD automation guard that returns exit code `1` only if breaking API contract changes exist.
+
+### 🧠 Intelligent Identity-Based Array Alignment
+- Eliminates false-positive full replacements when arrays are reordered or elements are inserted.
+- **`--array-match auto`**: Automatically discovers object primary keys (`id`, `uuid`, `key`, `name`, `slug`, `code`).
+- **`--array-key <field>`**: Aligns array elements on any custom property.
+
+### 🎯 Numeric & Temporal Fuzzy Tolerance
+- **`--numeric-tolerance <val|percent>`**: Eliminates floating-point precision jitter (e.g. `0.001` or `1%`).
+- **`--time-tolerance <duration>`**: Compares ISO-8601 timestamps with duration tolerance (e.g. `5s`, `1m`) to ignore clock drift.
+
+### ⏪ Reverse Rollback Inverse Patch Generator
+- **`--output rollback`**: Computes the exact mathematical inverse RFC 6902 JSON Patch (`undo.patch.json`) to safely revert modified documents back to their original state.
+
+### 🌐 Zero-Dependency Interactive HTML Visualizer
+- **`--output html`**: Generates a self-contained, single-file HTML report with side-by-side tree views, real-time search filtering, and one-click JSON patch copying.
+
+### ⚡ Deep Structural Diff Engine
+- Recursively compares arbitrary nested objects and arrays with granular path reporting (`user.profile.name`, `tags[2]`).
+- **Multiple Output Formats**: `human` (colorized terminal), `json` (machine-readable), `unified` (`@@ <path>`), `patch` (RFC 6902), `rollback` (inverse patch), and `html`.
+
+### 🔄 In-Memory Patch Application & Verification
+- `jdiff apply <patch.json> <input.json>`: Applies JSON Patch documents atomically in-memory.
+- `--verify-patch`: Validates round-trip equivalence in memory.
+
+### 🔒 Resource Controls & Security Boundaries
+- `--max-file-size`: Bounded file size protection (`B`, `KB`, `MB`, `GB`).
+- `--max-changes`: Caps difference collection to prevent runaway output.
+- `--max-depth`: Protects against stack exhaustion on hostile/adversarial recursion.
+
+### 🎯 Selective Comparison & Ignore Rules
+- Filter out timestamps, IDs, and dynamic tokens via CLI `--ignore` or `.jdiff.json` configuration files with wildcard support (`*`, `[*]`).
 
 ---
 
@@ -36,27 +52,73 @@ A fast, lightweight, zero-dependency command-line utility built in Go that compa
 ### Installation
 
 ```bash
-# Install directly via Go
-go install ./cmd/jdiff
-
-# Or build locally
+# Build standalone binary locally
 go build -o jdiff .
+
+# Or install to $GOPATH/bin
+go install ./cmd/jdiff
 ```
 
-### Basic Comparison
+### Usage Examples
 
+#### 1. Basic Structural Diff
 ```bash
-# Compare two JSON files
 jdiff old.json new.json
+```
 
-# Machine-readable JSON output
-jdiff --output json old.json new.json
+#### 2. Schema Breaking Change Analysis
+```bash
+# Display breaking change analysis report
+jdiff --breaking old_api.json new_api.json
 
-# Generate RFC 6902 JSON Patch
-jdiff --output patch old.json new.json
+# Exit with code 1 if breaking changes exist, 0 if safe/additive
+jdiff --check-breaking old_api.json new_api.json
+```
 
-# Apply a generated patch
-jdiff apply diff.patch.json old.json
+#### 3. Smart Array Alignment by Identity Key
+```bash
+# Auto-detect primary keys (id, uuid, name, etc.)
+jdiff --array-match auto old_users.json new_users.json
+
+# Align on custom property
+jdiff --array-key uuid old_manifest.json new_manifest.json
+```
+
+#### 4. Fuzzy Numeric & Timestamp Tolerance
+```bash
+# Ignore float rounding jitter within 0.001
+jdiff --numeric-tolerance 0.001 metrics_old.json metrics_new.json
+
+# Ignore timestamp clock drift within 5 seconds
+jdiff --time-tolerance 5s event_old.json event_new.json
+```
+
+#### 5. Generate and Apply RFC 6902 JSON Patches
+```bash
+# Generate patch
+jdiff --output patch --output-file update.patch.json old.json new.json
+
+# Apply patch
+jdiff apply update.patch.json old.json
+```
+
+#### 6. Generate Inverse Rollback Patch
+```bash
+# Generate inverse patch to undo changes
+jdiff --output rollback --output-file undo.patch.json old.json new.json
+
+# Revert document
+jdiff apply undo.patch.json new.json
+```
+
+#### 7. Standalone HTML Visualizer
+```bash
+jdiff --output html --output-file report.html old.json new.json
+```
+
+#### 8. Performance & Memory Statistics
+```bash
+jdiff --stats old.json new.json
 ```
 
 ---
@@ -101,44 +163,21 @@ Options:
 
 | Code | Meaning |
 |---|---|
-| `0` | Success / No differences found (or patch applied/verified) |
-| `1` | Differences detected between documents |
+| `0` | Success / No differences found (or patch applied / 100% backward-compatible in `--check-breaking`) |
+| `1` | Differences detected between documents (or breaking changes found in `--check-breaking`) |
 | `2` | Operational, parsing, I/O, or resource limit error |
-
-### Automation / CI/CD Example
-```bash
-if jdiff --quiet config.prod.json config.staging.json; then
-    echo "Configurations match."
-else
-    echo "Configurations differ! Review changes before deployment."
-fi
-```
 
 ---
 
-## Documentation
+## Comprehensive Documentation
 
+- [Advanced Features Guide](docs/advanced-features.md)
 - [Architecture Overview](docs/architecture.md)
 - [Configuration & Ignore Rules](docs/configuration.md)
 - [Output Formats & JSON Schema](docs/output-formats.md)
 - [JSON Patch (RFC 6902) Guide](docs/json-patch.md)
 - [Performance & Resource Controls](docs/performance.md)
 - [Development, Testing & Fuzzing Guide](docs/development.md)
-
----
-
-## Roadmap
-
-- [x] **v0.1.0**: CLI scaffolding, versioning, documentation, test harness.
-- [x] **v0.2.0**: Core structural diff engine, object traversal, primitive comparisons, deterministic output.
-- [x] **v0.3.0**: Deep recursive comparison, JSON Path engine, root primitive support, explicit type change detection, change summaries.
-- [x] **v0.4.0**: Professional terminal presentation (ANSI colors, `--no-color`, `--compact`, `--verbose`, `--summary`).
-- [x] **v0.5.0**: Granular index-based array comparison, array paths (`users[0].name`), nested arrays, and arrays of objects.
-- [x] **v0.6.0**: Ignore rules, wildcard paths (`*.key`, `users[*].id`), configuration files (`.jdiff.json`), and `--show-config`.
-- [x] **v0.7.0**: Multiple output formats (`human`, `json`, `unified`), `--output-file`, and standard input (`-`) piping.
-- [x] **v0.8.0**: JSON Patch generation (RFC 6902), patch application (`jdiff apply`), and verification (`--verify-patch`).
-- [x] **v0.9.0**: Performance metrics (`--stats`), resource controls (`--max-file-size`, `--max-changes`), `--exit-on-diff`, `--quiet`, and benchmarks.
-- [x] **v1.0.0**: Production-ready stable release, deep nesting protection (`--max-depth`), native Go fuzz testing, property invariants, and architecture documentation.
 
 ---
 
