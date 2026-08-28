@@ -1,30 +1,23 @@
 # jdiff
 
-A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking, intelligent array element comparison, selective ignore rules, and rich terminal presentation modes.
+A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking, intelligent array element comparison, selective ignore rules, and multiple output formats.
 
-**Current Version:** `v0.6.0`
+**Current Version:** `v0.7.0`
 
 ## Features
 
-- **Selective JSON Comparison & Ignore Rules**: Ignore dynamic or generated fields (e.g. timestamps, session IDs, request tokens) via CLI `--ignore` flags or configuration files.
-- **Flexible Path Pattern Matching**:
-  - **Exact Path**: `timestamp`, `metadata.created_at`, `users[0].session_id`
-  - **Object Subtree Pruning**: Ignoring `metadata` excludes the entire `metadata` sub-hierarchy.
-  - **Wildcard Keys (`*`)**: `*.timestamp`, `users.*.email`
-  - **Array Wildcards (`[*]`)**: `users[*].id`, `data.groups[*].values[*]`
-- **Configuration File Support (`.jdiff.json`)**: Automatically loads `.jdiff.json` if present in the current working directory, or an explicit file via `--config <path>`.
-- **Config Inspection (`--show-config`)**: Inspect merged active ignore rules without running a diff.
-- **Granular Array Comparison**: Performs deterministic index-based comparison of arrays, detecting added, removed, and modified elements.
-- **Deep Recursive Comparison**: Recursively traverses nested objects and arrays without falsely reporting parent containers.
-- **Precise JSON Path Engine**: Dot-separated property keys and bracketed array indices (`data.groups[0].values[1]`).
-- **Semantic ANSI Color Highlighting**: Added values in green (`+`), removed values in red (`-`), modified values in yellow, and path identifiers in cyan.
-- **Multiple Presentation Modes**:
-  - **Standard**: Hierarchical diff with change and ignored summaries.
-  - **Compact (`--compact`)**: Streamlined single-line representations per modification.
-  - **Summary-Only (`--summary`)**: Displays only change counters, ignored metrics, and totals.
-  - **Verbose (`--verbose`)**: Lists ignored patterns and file path context before the diff.
-- **CI/CD & Scripting Support (`--no-color`)**: Automatic color detection with explicit `--no-color` override and standard `NO_COLOR` environment variable support.
-- **Zero External Dependencies**: Built strictly using the Go standard library.
+- **Multiple Output Formats**:
+  - **`human` (default)**: Colorized, human-readable terminal output.
+  - **`json`**: Strict, machine-readable JSON output compliant with automated toolchains.
+  - **`unified`**: Unified diff representation (`@@ <path>`).
+- **Standard Input (`-`) & Shell Piping**: Compare JSON streams directly from standard input (e.g. `cat old.json | jdiff - new.json`).
+- **File Output (`--output-file`)**: Redirect clean diff results directly to a target file.
+- **Clean Stream Separation**: Diff output is written to `stdout` (or file); operational errors are routed exclusively to `stderr`.
+- **Selective JSON Comparison & Ignore Rules**: Ignore dynamic fields (timestamps, IDs) via CLI `--ignore` flags or `.jdiff.json` configuration files with wildcard support (`*`, `[*]`).
+- **Granular Array Comparison**: Deterministic index-based array element diffing (`users[0].name`, `languages[1]`).
+- **Deep Recursive Comparison**: Traverses arbitrary JSON nesting depths without flagging parent structures.
+- **Precise JSON Path Engine**: Dot-separated property keys and bracketed array indices.
+- **Zero External Dependencies**: Implemented entirely with the Go standard library.
 
 ## Installation
 
@@ -51,7 +44,9 @@ jdiff [options] <old.json> <new.json>
 | Flag | Description |
 |---|---|
 | `--help`, `-h` | Display usage and available options |
-| `--version`, `-v` | Display application version (`jdiff v0.6.0`) |
+| `--version`, `-v` | Display application version (`jdiff v0.7.0`) |
+| `--output <format>` | Select output format: `human` (default), `json`, `unified` |
+| `--output-file <file>` | Write diff output directly to a file |
 | `--ignore <path>` | Ignore a JSON path or pattern (repeatable) |
 | `--config <file>` | Use a configuration file (defaults to `.jdiff.json`) |
 | `--show-config` | Display active ignore configuration and exit |
@@ -62,87 +57,86 @@ jdiff [options] <old.json> <new.json>
 
 ---
 
-## Ignore Rules & Configuration
+## Output Formats & Automation
 
-### 1. Command-Line Ignore Rules
-
-You can supply one or more `--ignore` flags:
+### 1. Machine-Readable JSON (`--output json`)
 
 ```bash
-jdiff --ignore timestamp --ignore "*.updated_at" --ignore "users[*].session_id" old.json new.json
+jdiff --output json examples/output-old.json examples/output-new.json
 ```
 
-### 2. Configuration File (`.jdiff.json`)
-
-Create a `.jdiff.json` file in your repository or working directory:
-
+**Output**:
 ```json
 {
-  "ignore": [
-    "timestamp",
-    "request_id",
-    "*.updated_at",
-    "users[*].session_id"
+  "summary": {
+    "added": 1,
+    "ignored": 0,
+    "modified": 3,
+    "removed": 0,
+    "total": 4
+  },
+  "changes": [
+    {
+      "new": true,
+      "old": false,
+      "path": "config.debug",
+      "type": "modified"
+    },
+    {
+      "new": 60,
+      "old": 30,
+      "path": "config.timeout",
+      "type": "modified"
+    },
+    {
+      "new": "/oauth",
+      "path": "endpoints[2]",
+      "type": "added"
+    },
+    {
+      "new": 2,
+      "old": 1,
+      "path": "version",
+      "type": "modified"
+    }
   ]
 }
 ```
 
-Running `jdiff old.json new.json` will automatically load `.jdiff.json` if present.
-
-To specify a custom configuration file:
+### 2. Unified Diff Format (`--output unified`)
 
 ```bash
-jdiff --config ./custom-rules.json old.json new.json
-```
-
-### 3. Rule Precedence & Merging
-
-When both CLI `--ignore` flags and a configuration file are present:
-1. Rules are merged into a unified set.
-2. CLI rules take precedence in order of evaluation.
-3. Duplicate rules are automatically deduplicated.
-
-### 4. Viewing Active Rules
-
-```bash
-jdiff --config .jdiff.json --show-config
+jdiff --output unified examples/output-old.json examples/output-new.json
 ```
 
 **Output**:
 ```text
-Ignore rules:
-  timestamp
-  request_id
-  *.updated_at
-  users[*].session_id
+--- examples/output-old.json
++++ examples/output-new.json
+@@ config.debug
+- false
++ true
+
+@@ config.timeout
+- 30
++ 60
+
+@@ endpoints[2]
++ "/oauth"
+
+@@ version
+- 1
++ 2
 ```
 
----
-
-## Selective Comparison Example
-
-Comparing [`examples/ignore-old.json`](examples/ignore-old.json) and [`examples/ignore-new.json`](examples/ignore-new.json) with [`examples/.jdiff.json`](examples/.jdiff.json):
+### 3. Piping and Standard Input (`-`)
 
 ```bash
-jdiff --config examples/.jdiff.json examples/ignore-old.json examples/ignore-new.json
-```
+# Pipe old document via stdin
+cat old.json | jdiff - new.json
 
-**Output**:
-```text
-MODIFIED
-  users[0].name
-    - "Alice"
-    + "Alice Cooper"
-
-  version
-    - "v0.5.0"
-    + "v0.6.0"
-
-Summary:
-  Added:     0
-  Removed:   0
-  Modified:  2
-  Ignored:   5
+# Pipe dynamic API output and write JSON diff to file
+curl -s https://api.example.com/v2/config | jdiff --output json --output-file diff.json production.json -
 ```
 
 ---
@@ -152,12 +146,7 @@ Summary:
 | Code | Meaning |
 |---|---|
 | `0` | Command completed successfully (diff executed or help/version/config printed) |
-| `1` | Operational error (invalid arguments, unreadable files, invalid JSON syntax, invalid config) |
-
-## Current Limitations
-
-- **Array Comparison**: Uses index-based matching (`old[i]` vs `new[i]`). Advanced ID/key-based entity matching across differing positions and heuristic reorder detection are planned for future releases.
-- **Wildcard Syntax**: Supports exact paths, object segment wildcard (`*`), and array index wildcard (`[*]`). Arbitrary regex or full globs are not supported.
+| `1` | Operational error (invalid arguments, unreadable files, invalid JSON, unsupported format) |
 
 ## Roadmap
 
@@ -167,7 +156,8 @@ Summary:
 - [x] **v0.4.0**: Professional terminal presentation (ANSI colors, `--no-color`, `--compact`, `--verbose`, `--summary`).
 - [x] **v0.5.0**: Granular index-based array comparison, array paths (`users[0].name`), nested arrays, and arrays of objects.
 - [x] **v0.6.0**: Ignore rules, wildcard paths (`*.key`, `users[*].id`), configuration files (`.jdiff.json`), and `--show-config`.
-- [ ] **v0.7.0**: Standardized JSON Patch (RFC 6902) export.
+- [x] **v0.7.0**: Multiple output formats (`human`, `json`, `unified`), `--output-file`, and standard input (`-`) piping.
+- [ ] **v0.8.0**: Standardized JSON Patch (RFC 6902) export.
 
 ## Development & Testing
 

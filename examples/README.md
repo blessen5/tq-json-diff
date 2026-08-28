@@ -1,6 +1,6 @@
 # jdiff Examples
 
-This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, arrays, and selective ignore rules.
+This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, arrays, ignore rules, and output formats.
 
 ## Available Examples
 
@@ -8,57 +8,87 @@ This directory contains sample JSON pairs demonstrating structural differences a
 - [`nested-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-old.json) & [`nested-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-new.json)
 - [`arrays-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/arrays-old.json) & [`arrays-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/arrays-new.json)
 - [`ignore-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/ignore-old.json) & [`ignore-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/ignore-new.json)
+- [`output-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/output-old.json) & [`output-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/output-new.json)
 - [`.jdiff.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/.jdiff.json)
 
 ---
 
-## Selective Comparison Demonstrations (v0.6.0)
+## Output Formats (v0.7.0)
 
-### 1. Without Ignore Rules (Full Diff)
+### 1. Human (Default)
 ```bash
-jdiff examples/ignore-old.json examples/ignore-new.json
+jdiff --output human examples/output-old.json examples/output-new.json
 ```
 
-Outputs modifications across `timestamp`, `request_id`, `metadata.updated_at`, `users[0].session_id`, `users[1].session_id`, `users[0].name`, and `version`.
-
-### 2. Using CLI `--ignore` Flag
+### 2. Machine-Readable JSON
 ```bash
-jdiff --ignore timestamp --ignore request_id examples/ignore-old.json examples/ignore-new.json
+jdiff --output json examples/output-old.json examples/output-new.json
 ```
 
-### 3. Using Configuration File (`--config`)
+**Output**:
+```json
+{
+  "summary": {
+    "added": 1,
+    "ignored": 0,
+    "modified": 3,
+    "removed": 0,
+    "total": 4
+  },
+  "changes": [
+    {
+      "new": true,
+      "old": false,
+      "path": "config.debug",
+      "type": "modified"
+    },
+    {
+      "new": 60,
+      "old": 30,
+      "path": "config.timeout",
+      "type": "modified"
+    },
+    {
+      "new": "/oauth",
+      "path": "endpoints[2]",
+      "type": "added"
+    },
+    {
+      "new": 2,
+      "old": 1,
+      "path": "version",
+      "type": "modified"
+    }
+  ]
+}
+```
+
+### 3. Unified Diff Format
 ```bash
-jdiff --config examples/.jdiff.json examples/ignore-old.json examples/ignore-new.json
+jdiff --output unified examples/output-old.json examples/output-new.json
 ```
 
 **Output**:
 ```text
-MODIFIED
-  users[0].name
-    - "Alice"
-    + "Alice Cooper"
+--- examples/output-old.json
++++ examples/output-new.json
+@@ config.debug
+- false
++ true
 
-  version
-    - "v0.5.0"
-    + "v0.6.0"
+@@ config.timeout
+- 30
++ 60
 
-Summary:
-  Added:     0
-  Removed:   0
-  Modified:  2
-  Ignored:   5
+@@ endpoints[2]
++ "/oauth"
+
+@@ version
+- 1
++ 2
 ```
 
-### 4. Viewing Active Rules (`--show-config`)
+### 4. Stdin Piping & File Redirection
 ```bash
-jdiff --config examples/.jdiff.json --show-config
-```
-
-**Output**:
-```text
-Ignore rules:
-  timestamp
-  request_id
-  *.updated_at
-  users[*].session_id
+cat examples/output-old.json | jdiff --output json --output-file /tmp/diff.json - examples/output-new.json
 ```

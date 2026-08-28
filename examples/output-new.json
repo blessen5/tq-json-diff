@@ -1,0 +1,13 @@
+{
+  "service": "auth",
+  "version": 2,
+  "config": {
+    "timeout": 60,
+    "debug": true
+  },
+  "endpoints": [
+    "/login",
+    "/signup",
+    "/oauth"
+  ]
+}
