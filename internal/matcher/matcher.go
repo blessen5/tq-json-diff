@@ -19,6 +19,7 @@ const (
 	// MatcherExactIndex matches an exact array index ([0], [1]).
 	MatcherExactIndex
 	// MatcherWildcardIndex matches any array index ([*]).
+	MatcherWildcardIndex
 )
 
 // SegmentMatcher matches a single diff.Segment.
