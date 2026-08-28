@@ -220,8 +220,8 @@ func compare(path string, oldVal, newVal any) []Change {
 	}
 
 	// Case 3: Both are slices/arrays (v0.2.0: safe whole-value equality)
-	oldSlice, oldIsSlice := oldVal.([]any)
-	newSlice, newIsSlice := newVal.([]any)
+	_, oldIsSlice := oldVal.([]any)
+	_, newIsSlice := newVal.([]any)
 
 	if oldIsSlice || newIsSlice {
 		if !reflect.DeepEqual(oldVal, newVal) {
