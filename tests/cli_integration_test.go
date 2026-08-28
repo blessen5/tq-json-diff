@@ -68,8 +68,8 @@ func TestBinaryVersionFlag(t *testing.T) {
 	}
 
 	out := strings.TrimSpace(stdout.String())
-	if out != "jdiff v0.9.0" {
-		t.Errorf("expected stdout to be 'jdiff v0.9.0', got: %q", out)
+	if out != "jdiff v1.0.0" {
+		t.Errorf("expected stdout to be 'jdiff v1.0.0', got: %q", out)
 	}
 }
 
