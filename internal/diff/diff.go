@@ -10,6 +10,9 @@ import (
 	"strings"
 )
 
+// DefaultMaxDepth defines the standard maximum recursion depth to prevent stack exhaustion on adversarial inputs.
+const DefaultMaxDepth = 1000
+
 // ChangeType represents the type of difference detected.
 type ChangeType string
 
@@ -244,15 +247,18 @@ type Options struct {
 	Matcher    PathMatcher
 	MaxChanges int
 	EarlyExit  bool
+	MaxDepth   int
 }
 
 type diffState struct {
 	matcher      PathMatcher
 	maxChanges   int
 	earlyExit    bool
+	maxDepth     int
 	changes      []Change
 	ignoredCount int
 	truncated    bool
+	err          error
 }
 
 // CompareBytes parses two JSON byte slices and computes their structural differences.
@@ -277,13 +283,23 @@ func CompareBytesWithOptions(oldJSON, newJSON []byte, opts Options) (*DiffResult
 		return nil, fmt.Errorf("new document: %w", err)
 	}
 
+	depthLimit := opts.MaxDepth
+	if depthLimit <= 0 {
+		depthLimit = DefaultMaxDepth
+	}
+
 	state := &diffState{
 		matcher:    opts.Matcher,
 		maxChanges: opts.MaxChanges,
 		earlyExit:  opts.EarlyExit,
+		maxDepth:   depthLimit,
 	}
 
 	state.compare(NewPath(), oldVal, newVal)
+	if state.err != nil {
+		return nil, state.err
+	}
+
 	sortChanges(state.changes)
 
 	return &DiffResult{
@@ -295,6 +311,9 @@ func CompareBytesWithOptions(oldJSON, newJSON []byte, opts Options) (*DiffResult
 }
 
 func (s *diffState) shouldStop() bool {
+	if s.err != nil {
+		return true
+	}
 	if s.earlyExit && len(s.changes) > 0 {
 		return true
 	}
@@ -321,9 +340,15 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 		return
 	}
 
+	// Protect against deep recursion exhaustion
+	if len(path.Segments()) > s.maxDepth {
+		s.err = fmt.Errorf("maximum recursion depth (%d) exceeded at %s", s.maxDepth, path.String())
+		return
+	}
+
 	// If the current path is ignored, calculate dry differences and skip emitting
 	if s.matcher != nil && s.matcher.Matches(path) {
-		dryState := &diffState{}
+		dryState := &diffState{maxDepth: s.maxDepth}
 		dryState.compare(path, oldVal, newVal)
 		s.ignoredCount += len(dryState.changes)
 		return
@@ -367,7 +392,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 				} else if !inOld && inNew {
 					s.ignoredCount++
 				} else {
-					dryState := &diffState{}
+					dryState := &diffState{maxDepth: s.maxDepth}
 					dryState.compare(childPath, oldChild, newChild)
 					s.ignoredCount += len(dryState.changes)
 				}
@@ -419,7 +444,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 			}
 			indexPath := path.AppendIndex(i)
 			if s.matcher != nil && s.matcher.Matches(indexPath) {
-				dryState := &diffState{}
+				dryState := &diffState{maxDepth: s.maxDepth}
 				dryState.compare(indexPath, oldSlice[i], newSlice[i])
 				s.ignoredCount += len(dryState.changes)
 				continue
