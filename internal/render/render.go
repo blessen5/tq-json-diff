@@ -33,6 +33,10 @@ const (
 	FormatUnified Format = "unified"
 	// FormatPatch is an RFC 6902 JSON Patch document.
 	FormatPatch Format = "patch"
+	// FormatRollback is an inverse RFC 6902 JSON Patch document.
+	FormatRollback Format = "rollback"
+	// FormatHTML is a standalone interactive HTML visualizer.
+	FormatHTML Format = "html"
 )
 
 // ParseFormat converts a raw string to a recognized Format.
@@ -46,6 +50,10 @@ func ParseFormat(s string) (Format, error) {
 		return FormatUnified, nil
 	case "patch":
 		return FormatPatch, nil
+	case "rollback", "undo":
+		return FormatRollback, nil
+	case "html":
+		return FormatHTML, nil
 	default:
 		return "", fmt.Errorf("unsupported output format: %s", s)
 	}
@@ -73,6 +81,10 @@ func Render(w io.Writer, result *diff.DiffResult, opts Options) error {
 		return renderUnified(w, result, opts)
 	case FormatPatch:
 		return renderPatch(w, result, opts)
+	case FormatRollback:
+		return renderRollback(w, result, opts)
+	case FormatHTML:
+		return renderHTML(w, result, opts)
 	default:
 		return renderHuman(w, result, opts)
 	}
@@ -89,6 +101,17 @@ func renderPatch(w io.Writer, result *diff.DiffResult, opts Options) error {
 	return err
 }
 
+// renderRollback outputs an inverse RFC 6902 rollback patch document.
+func renderRollback(w io.Writer, result *diff.DiffResult, opts Options) error {
+	rollbackDoc := patch.GenerateRollback(result)
+	data, err := json.MarshalIndent(rollbackDoc, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
+}
+
 // renderJSON outputs machine-readable JSON diff results.
 func renderJSON(w io.Writer, result *diff.DiffResult, opts Options) error {
 	summary := result.Summary()
@@ -96,6 +119,7 @@ func renderJSON(w io.Writer, result *diff.DiffResult, opts Options) error {
 		"added":    summary.Added,
 		"removed":  summary.Removed,
 		"modified": summary.Modified,
+		"moved":    summary.Moved,
 		"ignored":  summary.Ignored,
 		"total":    summary.Total(),
 	}
@@ -464,7 +488,7 @@ func renderStats(w io.Writer, s *stats.Stats, color bool) {
 	sb.WriteString(fmt.Sprintf("  Old size:      %s\n", oldStr))
 	sb.WriteString(fmt.Sprintf("  New size:      %s\n", newStr))
 	sb.WriteString(fmt.Sprintf("  Changes:       %d\n", s.ChangesCount))
-	sb.WriteString(fmt.Sprintf("  Parse time:    %s\n", s.ParseTime.Round(100*1000))) // microseconds / ms
+	sb.WriteString(fmt.Sprintf("  Parse time:    %s\n", s.ParseTime.Round(100*1000)))
 	sb.WriteString(fmt.Sprintf("  Compare time:  %s\n", s.CompareTime.Round(100*1000)))
 	sb.WriteString(fmt.Sprintf("  Total time:    %s\n", s.TotalTime.Round(100*1000)))
 	sb.WriteString(fmt.Sprintf("  Allocated:     %s\n", stats.FormatBytes(int64(s.AllocBytes))))

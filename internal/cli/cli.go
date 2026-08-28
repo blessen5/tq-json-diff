@@ -16,20 +16,21 @@ import (
 	"jdiff/internal/matcher"
 	"jdiff/internal/patch"
 	"jdiff/internal/render"
+	"jdiff/internal/schema"
 	"jdiff/internal/stats"
 	"jdiff/internal/version"
 )
 
 const (
-	// ExitCodeOK indicates successful execution with no differences detected.
+	// ExitCodeOK indicates successful execution with no differences detected (or 100% backward-compatible).
 	ExitCodeOK = 0
-	// ExitCodeDiff indicates differences were detected.
+	// ExitCodeDiff indicates differences were detected (or breaking changes found in --check-breaking).
 	ExitCodeDiff = 1
 	// ExitCodeError indicates an operational error, invalid argument, or resource limit violation.
 	ExitCodeError = 2
 )
 
-const usage = `jdiff - JSON Structural Diff
+const usage = `jdiff - JSON Structural Diff & Semantic Analyzer
 
 Usage:
   jdiff [options] <old.json> <new.json>
@@ -38,9 +39,15 @@ Usage:
 Options:
   --help                 Show help
   --version              Show version
-  --output <format>      Output format: human, json, unified, patch (default: human)
+  --output <format>      Output format: human, json, unified, patch, rollback, html (default: human)
   --output-file <file>   Write output to a file instead of stdout
   --verify-patch         Generate, apply, and verify the patch
+  --breaking             Analyze and display API/schema breaking changes
+  --check-breaking       Exit with status 1 if breaking changes exist, 0 if backward-compatible
+  --array-match <mode>   Array alignment mode: index, auto, key (default: index)
+  --array-key <field>    Object field to align arrays on (e.g. id, uuid, key)
+  --numeric-tolerance <v> Ignore numeric float drift within delta or percent (e.g. 0.01, 1%)
+  --time-tolerance <dur> Ignore timestamp drift within duration (e.g. 5s, 1m)
   --stats                Display performance and memory statistics
   --max-file-size <size> Maximum allowed input file size (e.g. 100MB, 10KB, 500B)
   --max-changes <N>      Maximum number of differences to collect before truncating
@@ -93,6 +100,12 @@ func (c *CLI) Run(args []string) int {
 		outputFormatStr string
 		outputFile      string
 		verifyPatch     bool
+		showBreaking    bool
+		checkBreaking   bool
+		arrayMatchMode  string
+		arrayKey        string
+		numericTolStr   string
+		timeTolStr      string
 		showStats       bool
 		maxFileSizeStr  string
 		maxChanges      int
@@ -145,6 +158,46 @@ func (c *CLI) Run(args []string) int {
 			outputFile = strings.TrimPrefix(arg, "--output-file=")
 		case arg == "--verify-patch":
 			verifyPatch = true
+		case arg == "--breaking":
+			showBreaking = true
+		case arg == "--check-breaking":
+			checkBreaking = true
+		case arg == "--array-match":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --array-match")
+				return ExitCodeError
+			}
+			i++
+			arrayMatchMode = args[i]
+		case strings.HasPrefix(arg, "--array-match="):
+			arrayMatchMode = strings.TrimPrefix(arg, "--array-match=")
+		case arg == "--array-key":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --array-key")
+				return ExitCodeError
+			}
+			i++
+			arrayKey = args[i]
+		case strings.HasPrefix(arg, "--array-key="):
+			arrayKey = strings.TrimPrefix(arg, "--array-key=")
+		case arg == "--numeric-tolerance":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --numeric-tolerance")
+				return ExitCodeError
+			}
+			i++
+			numericTolStr = args[i]
+		case strings.HasPrefix(arg, "--numeric-tolerance="):
+			numericTolStr = strings.TrimPrefix(arg, "--numeric-tolerance=")
+		case arg == "--time-tolerance":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --time-tolerance")
+				return ExitCodeError
+			}
+			i++
+			timeTolStr = args[i]
+		case strings.HasPrefix(arg, "--time-tolerance="):
+			timeTolStr = strings.TrimPrefix(arg, "--time-tolerance=")
 		case arg == "--stats":
 			showStats = true
 		case arg == "--max-file-size":
@@ -238,6 +291,44 @@ func (c *CLI) Run(args []string) int {
 	format, err := render.ParseFormat(outputFormatStr)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: %v\n", err)
+		return ExitCodeError
+	}
+
+	// Parse tolerance options
+	var tolerance diff.ToleranceOptions
+	if numericTolStr != "" {
+		delta, pct, err := diff.ParseNumericTolerance(numericTolStr)
+		if err != nil {
+			fmt.Fprintf(c.stderr, "jdiff: invalid --numeric-tolerance: %v\n", err)
+			return ExitCodeError
+		}
+		tolerance.NumericDelta = delta
+		tolerance.NumericPercent = pct
+	}
+	if timeTolStr != "" {
+		dur, err := time.ParseDuration(timeTolStr)
+		if err != nil {
+			fmt.Fprintf(c.stderr, "jdiff: invalid --time-tolerance duration: %v\n", err)
+			return ExitCodeError
+		}
+		tolerance.TimeDelta = dur
+	}
+
+	// Parse array matching strategy
+	var arrayStrat diff.ArrayMatchStrategy
+	switch strings.ToLower(arrayMatchMode) {
+	case "", "index":
+		if arrayKey != "" {
+			arrayStrat = diff.MatchKey
+		} else {
+			arrayStrat = diff.MatchIndex
+		}
+	case "auto":
+		arrayStrat = diff.MatchAuto
+	case "key":
+		arrayStrat = diff.MatchKey
+	default:
+		fmt.Fprintf(c.stderr, "jdiff: unsupported --array-match mode: %q (supported: index, auto, key)\n", arrayMatchMode)
 		return ExitCodeError
 	}
 
@@ -355,10 +446,13 @@ func (c *CLI) Run(args []string) int {
 
 	compareStart := time.Now()
 	diffResult, err := diff.CompareBytesWithOptions(oldData, newData, diff.Options{
-		Matcher:    pathMatcher,
-		MaxChanges: maxChanges,
-		MaxDepth:   maxDepth,
-		EarlyExit:  exitOnDiff,
+		Matcher:       pathMatcher,
+		MaxChanges:    maxChanges,
+		MaxDepth:      maxDepth,
+		EarlyExit:     exitOnDiff,
+		ArrayStrategy: arrayStrat,
+		ArrayKey:      arrayKey,
+		Tolerance:     tolerance,
 	})
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: %v\n", err)
@@ -384,6 +478,19 @@ func (c *CLI) Run(args []string) int {
 			AllocBytes:   allocDiff,
 			ChangesCount: len(diffResult.Changes),
 		}
+	}
+
+	// Handle --breaking or --check-breaking
+	if showBreaking || checkBreaking {
+		report := schema.Analyze(diffResult)
+		if !quiet {
+			colorEnabled := !noColor && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+			_ = report.Format(c.stdout, colorEnabled)
+		}
+		if report.HasBreaking() {
+			return ExitCodeDiff
+		}
+		return ExitCodeOK
 	}
 
 	// Handle --verify-patch
@@ -428,8 +535,8 @@ func (c *CLI) Run(args []string) int {
 		Stats:        statInfo,
 	}
 
-	// Handle statistics routing when patch format is selected
-	if format == render.FormatPatch && showStats && statInfo != nil {
+	// Handle statistics routing when patch/rollback format is selected
+	if (format == render.FormatPatch || format == render.FormatRollback) && showStats && statInfo != nil {
 		render.Render(c.stderr, diffResult, render.Options{
 			Format: render.FormatHuman,
 			Stats:  statInfo,

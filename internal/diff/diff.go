@@ -23,6 +23,8 @@ const (
 	ChangeRemoved ChangeType = "REMOVED"
 	// ChangeModified indicates a value was modified between old and new documents.
 	ChangeModified ChangeType = "MODIFIED"
+	// ChangeMoved indicates an array element changed positions.
+	ChangeMoved ChangeType = "MOVED"
 )
 
 // JSONType represents the high-level JSON data type of a value.
@@ -72,6 +74,8 @@ type Change struct {
 	NewValue any
 	OldType  JSONType
 	NewType  JSONType
+	OldIndex int
+	NewIndex int
 }
 
 // Summary encapsulates the total counts of detected changes.
@@ -79,14 +83,15 @@ type Summary struct {
 	Added      int
 	Removed    int
 	Modified   int
+	Moved      int
 	Ignored    int
 	Truncated  bool
 	MaxChanges int
 }
 
-// Total returns the total number of actual differences (Added + Removed + Modified).
+// Total returns the total number of actual differences (Added + Removed + Modified + Moved).
 func (s Summary) Total() int {
-	return s.Added + s.Removed + s.Modified
+	return s.Added + s.Removed + s.Modified + s.Moved
 }
 
 // DiffResult holds all changes detected between two JSON documents.
@@ -153,6 +158,8 @@ func (r *DiffResult) Summary() Summary {
 			s.Removed++
 		case ChangeModified:
 			s.Modified++
+		case ChangeMoved:
+			s.Moved++
 		}
 	}
 	return s
@@ -217,6 +224,9 @@ func (r *DiffResult) Format(w io.Writer) error {
 	sumSB.WriteString(fmt.Sprintf("  Added:     %d\n", summary.Added))
 	sumSB.WriteString(fmt.Sprintf("  Removed:   %d\n", summary.Removed))
 	sumSB.WriteString(fmt.Sprintf("  Modified:  %d", summary.Modified))
+	if summary.Moved > 0 {
+		sumSB.WriteString(fmt.Sprintf("\n  Moved:     %d", summary.Moved))
+	}
 	if summary.Ignored > 0 {
 		sumSB.WriteString(fmt.Sprintf("\n  Ignored:   %d", summary.Ignored))
 	}
@@ -244,21 +254,27 @@ type PathMatcher interface {
 
 // Options encapsulates optional configuration for the diff engine.
 type Options struct {
-	Matcher    PathMatcher
-	MaxChanges int
-	EarlyExit  bool
-	MaxDepth   int
+	Matcher       PathMatcher
+	MaxChanges    int
+	EarlyExit     bool
+	MaxDepth      int
+	ArrayStrategy ArrayMatchStrategy
+	ArrayKey      string
+	Tolerance     ToleranceOptions
 }
 
 type diffState struct {
-	matcher      PathMatcher
-	maxChanges   int
-	earlyExit    bool
-	maxDepth     int
-	changes      []Change
-	ignoredCount int
-	truncated    bool
-	err          error
+	matcher       PathMatcher
+	maxChanges    int
+	earlyExit     bool
+	maxDepth      int
+	arrayStrategy ArrayMatchStrategy
+	arrayKey      string
+	tolerance     ToleranceOptions
+	changes       []Change
+	ignoredCount  int
+	truncated     bool
+	err           error
 }
 
 // CompareBytes parses two JSON byte slices and computes their structural differences.
@@ -288,11 +304,19 @@ func CompareBytesWithOptions(oldJSON, newJSON []byte, opts Options) (*DiffResult
 		depthLimit = DefaultMaxDepth
 	}
 
+	strategy := opts.ArrayStrategy
+	if strategy == "" {
+		strategy = MatchIndex
+	}
+
 	state := &diffState{
-		matcher:    opts.Matcher,
-		maxChanges: opts.MaxChanges,
-		earlyExit:  opts.EarlyExit,
-		maxDepth:   depthLimit,
+		matcher:       opts.Matcher,
+		maxChanges:    opts.MaxChanges,
+		earlyExit:     opts.EarlyExit,
+		maxDepth:      depthLimit,
+		arrayStrategy: strategy,
+		arrayKey:      opts.ArrayKey,
+		tolerance:     opts.Tolerance,
 	}
 
 	state.compare(NewPath(), oldVal, newVal)
@@ -348,7 +372,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 
 	// If the current path is ignored, calculate dry differences and skip emitting
 	if s.matcher != nil && s.matcher.Matches(path) {
-		dryState := &diffState{maxDepth: s.maxDepth}
+		dryState := &diffState{maxDepth: s.maxDepth, tolerance: s.tolerance}
 		dryState.compare(path, oldVal, newVal)
 		s.ignoredCount += len(dryState.changes)
 		return
@@ -392,7 +416,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 				} else if !inOld && inNew {
 					s.ignoredCount++
 				} else {
-					dryState := &diffState{maxDepth: s.maxDepth}
+					dryState := &diffState{maxDepth: s.maxDepth, tolerance: s.tolerance}
 					dryState.compare(childPath, oldChild, newChild)
 					s.ignoredCount += len(dryState.changes)
 				}
@@ -432,6 +456,66 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 		oldSlice := oldVal.([]any)
 		newSlice := newVal.([]any)
 
+		// Check if intelligent key-based array matching should be used
+		var matchKey string
+		if s.arrayStrategy == MatchKey && s.arrayKey != "" {
+			matchKey = s.arrayKey
+		} else if s.arrayStrategy == MatchAuto {
+			matchKey = DetectArrayKey(oldSlice)
+			if matchKey == "" {
+				matchKey = DetectArrayKey(newSlice)
+			}
+		}
+
+		if matchKey != "" {
+			alignment := alignArrayObjects(oldSlice, newSlice, matchKey)
+
+			// Process matched pairs
+			for _, pair := range alignment.matchedPairs {
+				if s.shouldStop() {
+					return
+				}
+				// Construct item path based on matching index in new
+				itemPath := path.AppendIndex(pair.newIdx)
+				s.compare(itemPath, pair.oldItem, pair.newItem)
+			}
+
+			// Process removed elements
+			for _, oldIdx := range alignment.removedOld {
+				if s.shouldStop() {
+					return
+				}
+				itemPath := path.AppendIndex(oldIdx)
+				s.addChange(Change{
+					Path:     itemPath,
+					Type:     ChangeRemoved,
+					OldValue: oldSlice[oldIdx],
+					NewValue: nil,
+					OldType:  DetectType(oldSlice[oldIdx]),
+					NewType:  JSONTypeNull,
+				})
+			}
+
+			// Process added elements
+			for _, newIdx := range alignment.addedNew {
+				if s.shouldStop() {
+					return
+				}
+				itemPath := path.AppendIndex(newIdx)
+				s.addChange(Change{
+					Path:     itemPath,
+					Type:     ChangeAdded,
+					OldValue: nil,
+					NewValue: newSlice[newIdx],
+					OldType:  JSONTypeNull,
+					NewType:  DetectType(newSlice[newIdx]),
+				})
+			}
+
+			return
+		}
+
+		// Standard index-based array comparison
 		minLen := len(oldSlice)
 		if len(newSlice) < minLen {
 			minLen = len(newSlice)
@@ -444,7 +528,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 			}
 			indexPath := path.AppendIndex(i)
 			if s.matcher != nil && s.matcher.Matches(indexPath) {
-				dryState := &diffState{maxDepth: s.maxDepth}
+				dryState := &diffState{maxDepth: s.maxDepth, tolerance: s.tolerance}
 				dryState.compare(indexPath, oldSlice[i], newSlice[i])
 				s.ignoredCount += len(dryState.changes)
 				continue
@@ -509,7 +593,7 @@ func (s *diffState) compare(path Path, oldVal, newVal any) {
 	}
 
 	// Case 4: Primitive values with identical types
-	if !valuesEqual(oldVal, newVal) {
+	if !s.valuesEqual(oldVal, newVal) {
 		s.addChange(Change{
 			Path:     path,
 			Type:     ChangeModified,
@@ -531,8 +615,8 @@ func sortChanges(changes []Change) {
 	})
 }
 
-// valuesEqual checks equality between two JSON primitive values.
-func valuesEqual(a, b any) bool {
+// valuesEqual checks equality between two JSON primitive values respecting fuzzy tolerance options.
+func (s *diffState) valuesEqual(a, b any) bool {
 	if a == nil && b == nil {
 		return true
 	}
@@ -540,11 +624,25 @@ func valuesEqual(a, b any) bool {
 		return false
 	}
 
-	// Compare json.Number or other primitives
+	// Check numeric tolerance
 	numA, isNumA := a.(json.Number)
 	numB, isNumB := b.(json.Number)
 	if isNumA && isNumB {
+		if s.tolerance.NumericDelta > 0 || s.tolerance.NumericPercent > 0 {
+			if NumbersWithinTolerance(numA, numB, s.tolerance) {
+				return true
+			}
+		}
 		return numA.String() == numB.String()
+	}
+
+	// Check timestamp tolerance
+	strA, isStrA := a.(string)
+	strB, isStrB := b.(string)
+	if isStrA && isStrB && s.tolerance.TimeDelta > 0 {
+		if TimestampsWithinTolerance(strA, strB, s.tolerance) {
+			return true
+		}
 	}
 
 	return reflect.DeepEqual(a, b)

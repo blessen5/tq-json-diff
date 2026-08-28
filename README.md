@@ -64,30 +64,36 @@ jdiff apply diff.patch.json old.json
 ## CLI Options & Flags
 
 ```text
-jdiff [options] <old.json> <new.json>
-jdiff apply [options] <patch.json> <input.json>
-```
+Usage:
+  jdiff [options] <old.json> <new.json>
+  jdiff apply [options] <patch.json> <input.json>
 
-| Flag | Description |
-|---|---|
-| `--help`, `-h` | Display usage and available options |
-| `--version`, `-v` | Display application version (`jdiff v1.0.0`) |
-| `--output <format>` | Select output format: `human` (default), `json`, `unified`, `patch` |
-| `--output-file <file>` | Write diff/patch output directly to a file |
-| `--stats` | Display performance, timing, and memory allocation metrics |
-| `--max-file-size <size>` | Maximum allowed input file size (e.g. `100MB`, `10KB`, `500B`) |
-| `--max-changes <N>` | Maximum number of differences to collect before truncating |
-| `--max-depth <N>` | Maximum allowed JSON recursion depth (default: `1000`) |
-| `--exit-on-diff` | Terminate comparison immediately upon discovering differences |
-| `--quiet`, `-q` | Suppress output and communicate exclusively via exit codes |
-| `--verify-patch` | Generate, apply, and verify the patch in memory |
-| `--ignore <path>` | Ignore a JSON path or wildcard pattern (repeatable) |
-| `--config <file>` | Use a configuration file (defaults to `.jdiff.json`) |
-| `--show-config` | Display active ignore configuration and exit |
-| `--no-color` | Disable ANSI terminal color escape sequences |
-| `--compact` | Display compact single-line diffs |
-| `--verbose` | Display active ignore rules and comparison file context |
-| `--summary` | Suppress individual change diffs and display only the summary counts |
+Options:
+  --help                 Show help
+  --version              Show version
+  --output <format>      Output format: human, json, unified, patch, rollback, html (default: human)
+  --output-file <file>   Write output to a file instead of stdout
+  --verify-patch         Generate, apply, and verify the patch
+  --breaking             Analyze and display API/schema breaking changes
+  --check-breaking       Exit with status 1 if breaking changes exist, 0 if backward-compatible
+  --array-match <mode>   Array alignment mode: index, auto, key (default: index)
+  --array-key <field>    Object field to align arrays on (e.g. id, uuid, key)
+  --numeric-tolerance <v> Ignore numeric float drift within delta or percent (e.g. 0.01, 1%)
+  --time-tolerance <dur> Ignore timestamp drift within duration (e.g. 5s, 1m)
+  --stats                Display performance and memory statistics
+  --max-file-size <size> Maximum allowed input file size (e.g. 100MB, 10KB, 500B)
+  --max-changes <N>      Maximum number of differences to collect before truncating
+  --max-depth <N>        Maximum allowed JSON recursion depth (default: 1000)
+  --exit-on-diff         Terminate comparison immediately upon discovering differences
+  --quiet, -q            Suppress output and communicate exclusively via exit codes
+  --no-color             Disable colored output
+  --compact              Display compact diff output
+  --verbose              Display additional comparison information
+  --summary              Display only the change summary
+  --ignore <path>        Ignore a JSON path (can be specified multiple times)
+  --config <file>        Use a configuration file (defaults to .jdiff.json)
+  --show-config          Show active comparison configuration
+```
 
 ---
 
