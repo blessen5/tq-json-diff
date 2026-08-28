@@ -6,15 +6,15 @@ import (
 )
 
 func TestVersionShort(t *testing.T) {
-	if Short() != Version {
-		t.Errorf("expected Short() == %q, got %q", Version, Short())
+	if Short() != "v0.2.0" {
+		t.Errorf("expected Short() == %q, got %q", "v0.2.0", Short())
 	}
 }
 
 func TestVersionInfo(t *testing.T) {
 	info := Info()
 	expectedSubstrings := []string{
-		"jdiff version",
+		"jdiff v0.2.0",
 		"commit:",
 		"built at:",
 		"go version:",

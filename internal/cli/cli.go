@@ -1,20 +1,21 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
+	"jdiff/internal/diff"
 	"jdiff/internal/version"
 )
 
 const (
-	// ExitCodeOK indicates successful execution with no differences or informational command completed.
+	// ExitCodeOK indicates the command completed successfully.
 	ExitCodeOK = 0
-	// ExitCodeDiffFound indicates differences were found between JSON files (reserved for Phase 2+).
-	ExitCodeDiffFound = 1
-	// ExitCodeError indicates an error occurred (invalid arguments, I/O error, invalid JSON).
-	ExitCodeError = 2
+	// ExitCodeError indicates invalid input or operational error.
+	ExitCodeError = 1
 )
 
 // HelpText is the standard help message displayed by jdiff.
@@ -43,7 +44,7 @@ func New(stdout, stderr io.Writer) *CLI {
 }
 
 // Run parses arguments and executes the requested command.
-// Returns an integer exit code.
+// Returns an integer exit code (0 for success, 1 for error).
 func (c *CLI) Run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(c.Stderr, HelpText)
@@ -56,7 +57,7 @@ func (c *CLI) Run(args []string) int {
 		fmt.Fprint(c.Stdout, HelpText)
 		return ExitCodeOK
 	case "--version", "-v", "version":
-		fmt.Fprintf(c.Stdout, "jdiff version %s\n", version.Short())
+		fmt.Fprintf(c.Stdout, "jdiff %s\n", version.Short())
 		return ExitCodeOK
 	}
 
@@ -67,35 +68,68 @@ func (c *CLI) Run(args []string) int {
 			return ExitCodeOK
 		}
 		if arg == "--version" || arg == "-v" {
-			fmt.Fprintf(c.Stdout, "jdiff version %s\n", version.Short())
+			fmt.Fprintf(c.Stdout, "jdiff %s\n", version.Short())
 			return ExitCodeOK
 		}
 	}
 
-	// Check positional arguments
+	// Check positional arguments and flags
 	var positional []string
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
-			fmt.Fprintf(c.Stderr, "Error: unknown flag %q\n\n%s", arg, HelpText)
+			fmt.Fprintf(c.Stderr, "jdiff: unknown flag %q\n\n%s", arg, HelpText)
 			return ExitCodeError
 		}
 		positional = append(positional, arg)
 	}
 
 	if len(positional) < 2 {
-		fmt.Fprintf(c.Stderr, "Error: two JSON file paths are required (<old.json> <new.json>)\n\n%s", HelpText)
+		fmt.Fprintln(c.Stderr, "jdiff: missing input files (expected <old.json> <new.json>)")
 		return ExitCodeError
 	}
 
 	if len(positional) > 2 {
-		fmt.Fprintf(c.Stderr, "Error: too many arguments provided (expected 2, got %d)\n\n%s", len(positional), HelpText)
+		fmt.Fprintf(c.Stderr, "jdiff: too many arguments provided (expected 2, got %d)\n", len(positional))
 		return ExitCodeError
 	}
 
 	oldPath := positional[0]
 	newPath := positional[1]
 
-	// Phase 1 placeholder: JSON diffing will be implemented in Phase 2
-	fmt.Fprintf(c.Stdout, "Comparing %s and %s...\n(JSON comparison engine will be initialized in Phase 2)\n", oldPath, newPath)
+	oldBytes, err := os.ReadFile(oldPath)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: failed to read %s: %v\n", oldPath, err)
+		return ExitCodeError
+	}
+
+	// Pre-validate JSON for specific error messaging per file
+	var testVal any
+	if err := json.Unmarshal(oldBytes, &testVal); err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: invalid JSON in %s: %v\n", oldPath, err)
+		return ExitCodeError
+	}
+
+	newBytes, err := os.ReadFile(newPath)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: failed to read %s: %v\n", newPath, err)
+		return ExitCodeError
+	}
+
+	if err := json.Unmarshal(newBytes, &testVal); err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: invalid JSON in %s: %v\n", newPath, err)
+		return ExitCodeError
+	}
+
+	res, err := diff.CompareBytes(oldBytes, newBytes)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: error comparing files: %v\n", err)
+		return ExitCodeError
+	}
+
+	if err := res.Format(c.Stdout); err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: error writing output: %v\n", err)
+		return ExitCodeError
+	}
+
 	return ExitCodeOK
 }

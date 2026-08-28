@@ -1,0 +1,14 @@
+{
+  "service": "auth-api",
+  "version": 1,
+  "config": {
+    "host": "localhost",
+    "port": 8080,
+    "debug": true,
+    "database": {
+      "name": "auth_dev",
+      "pool": 5
+    }
+  },
+  "tags": ["auth", "security"]
+}

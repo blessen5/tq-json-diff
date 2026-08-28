@@ -8,7 +8,7 @@ import (
 
 var (
 	// Version holds the current application version.
-	Version = "0.1.0-dev"
+	Version = "v0.2.0"
 
 	// GitCommit holds the git commit hash at build time.
 	GitCommit = "none"
@@ -20,7 +20,7 @@ var (
 // Info returns formatted version and build metadata.
 func Info() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("jdiff version %s\n", Version))
+	sb.WriteString(fmt.Sprintf("jdiff %s\n", Version))
 	sb.WriteString(fmt.Sprintf("  commit:     %s\n", GitCommit))
 	sb.WriteString(fmt.Sprintf("  built at:   %s\n", BuildDate))
 	sb.WriteString(fmt.Sprintf("  go version: %s\n", runtime.Version()))
@@ -28,7 +28,7 @@ func Info() string {
 	return sb.String()
 }
 
-// Short returns just the version number.
+// Short returns just the version string.
 func Short() string {
 	return Version
 }
