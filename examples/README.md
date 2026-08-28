@@ -4,15 +4,17 @@ This directory contains sample JSON pairs demonstrating structural differences a
 
 ## Available Examples
 
-### 1. Basic Object Changes
-- [`basic-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-old.json)
-- [`basic-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-new.json)
+- [`basic-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-old.json) & [`basic-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-new.json)
+- [`nested-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-old.json) & [`nested-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-new.json)
 
-Run:
+---
+
+## Output Modes Demonstrations
+
+### 1. Default Mode
 ```bash
 jdiff examples/basic-old.json examples/basic-new.json
 ```
-
 Output:
 ```text
 MODIFIED
@@ -34,40 +36,68 @@ Summary:
   Modified:  2
 ```
 
-### 2. Deeply Nested Object Changes
-- [`nested-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-old.json)
-- [`nested-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-new.json)
-
-Run:
+### 2. Compact Mode (`--compact`)
 ```bash
-jdiff examples/nested-old.json examples/nested-new.json
+jdiff --compact examples/basic-old.json examples/basic-new.json
 ```
-
 Output:
 ```text
-MODIFIED
-  user.preferences.theme
-    - "light"
-    + "dark"
-
-  user.profile.age
-    - 28
-    + 29
-
-  user.profile.contact.email
-    - "john.old@example.com"
-    + "john.new@example.com"
-
-ADDED
-  user.profile.address
-    + {"city":"Bengaluru","country":"India"}
-
-REMOVED
-  user.profile.contact.phone
-    - "+1-555-0100"
+MODIFIED age: 19 → 20
+MODIFIED city: "Kochi" → "Bengaluru"
+ADDED country: "India"
 
 Summary:
   Added:     1
-  Removed:   1
-  Modified:  3
+  Removed:   0
+  Modified:  2
+```
+
+### 3. Summary-Only Mode (`--summary`)
+```bash
+jdiff --summary examples/basic-old.json examples/basic-new.json
+```
+Output:
+```text
+JSON Diff Summary
+
+Added:     1
+Removed:   0
+Modified:  2
+Total:     3
+```
+
+### 4. No-Color Mode (`--no-color`)
+```bash
+jdiff --no-color examples/basic-old.json examples/basic-new.json
+```
+Disables all ANSI terminal color sequences (ideal for CI/CD pipelines, log files, and redirected pipes).
+
+### 5. Verbose Mode (`--verbose`)
+```bash
+jdiff --verbose examples/basic-old.json examples/basic-new.json
+```
+Output:
+```text
+Comparing:
+  Old: examples/basic-old.json
+  New: examples/basic-new.json
+
+Changes:
+MODIFIED
+  age
+    - 19
+    + 20
+
+  city
+    - "Kochi"
+    + "Bengaluru"
+
+ADDED
+  country
+    + "India"
+
+Summary:
+  Added:     1
+  Removed:   0
+  Modified:  2
 ```

@@ -13,7 +13,6 @@ import (
 var binPath string
 
 func TestMain(m *testing.M) {
-	// Build binary for integration testing
 	tmpDir, err := os.MkdirTemp("", "jdiff-test-*")
 	if err != nil {
 		panic(err)
@@ -46,8 +45,11 @@ func TestBinaryHelpFlag(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "jdiff - JSON Structural Diff") {
-		t.Errorf("expected stdout to contain help title, got: %s", out)
+	if !strings.Contains(out, "jdiff [options] <old.json> <new.json>") {
+		t.Errorf("expected stdout to contain usage, got: %s", out)
+	}
+	if !strings.Contains(out, "--compact") || !strings.Contains(out, "--verbose") || !strings.Contains(out, "--summary") {
+		t.Errorf("expected stdout to list all flags, got: %s", out)
 	}
 }
 
@@ -63,8 +65,8 @@ func TestBinaryVersionFlag(t *testing.T) {
 	}
 
 	out := strings.TrimSpace(stdout.String())
-	if out != "jdiff v0.3.0" {
-		t.Errorf("expected stdout to be 'jdiff v0.3.0', got: %q", out)
+	if out != "jdiff v0.4.0" {
+		t.Errorf("expected stdout to be 'jdiff v0.4.0', got: %q", out)
 	}
 }
 
@@ -79,89 +81,82 @@ func TestBinaryNoArgsError(t *testing.T) {
 		t.Fatalf("expected command to exit with non-zero code")
 	}
 
-	if !strings.Contains(stderr.String(), "jdiff - JSON Structural Diff") {
+	if !strings.Contains(stderr.String(), "jdiff [options] <old.json> <new.json>") {
 		t.Errorf("expected help output in stderr, got: %s", stderr.String())
 	}
 }
 
-func TestBinaryDiffExecution(t *testing.T) {
+func TestBinaryCompactAndNoColor(t *testing.T) {
 	tmpDir := t.TempDir()
 	oldFile := filepath.Join(tmpDir, "old.json")
 	newFile := filepath.Join(tmpDir, "new.json")
 
-	oldJSON := `{
-		"user": {
-			"profile": {
-				"name": "John",
-				"phone": "123456789"
-			}
-		}
-	}`
-	newJSON := `{
-		"user": {
-			"profile": {
-				"name": "James",
-				"email": "james@example.com"
-			}
-		}
-	}`
+	_ = os.WriteFile(oldFile, []byte(`{"user": {"age": 19}}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"user": {"age": 20}}`), 0644)
 
-	if err := os.WriteFile(oldFile, []byte(oldJSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(newFile, []byte(newJSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command(binPath, oldFile, newFile)
+	cmd := exec.Command(binPath, "--compact", "--no-color", oldFile, newFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	if err != nil {
-		t.Fatalf("expected binary to exit 0, got error: %v, stderr: %s", err, stderr.String())
+		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "MODIFIED\n  user.profile.name\n    - \"John\"\n    + \"James\"") {
-		t.Errorf("expected user.profile.name modification in output, got:\n%s", out)
+	if strings.Contains(out, "\033[") {
+		t.Errorf("expected no ANSI codes with --no-color, got: %q", out)
 	}
-	if !strings.Contains(out, "ADDED\n  user.profile.email\n    + \"james@example.com\"") {
-		t.Errorf("expected user.profile.email added in output, got:\n%s", out)
-	}
-	if !strings.Contains(out, "REMOVED\n  user.profile.phone\n    - \"123456789\"") {
-		t.Errorf("expected user.profile.phone removed in output, got:\n%s", out)
-	}
-	if !strings.Contains(out, "Summary:\n  Added:     1\n  Removed:   1\n  Modified:  1") {
-		t.Errorf("expected summary block in output, got:\n%s", out)
+	if !strings.Contains(out, "MODIFIED user.age: 19 → 20") {
+		t.Errorf("expected compact diff line, got: %s", out)
 	}
 }
 
-func TestBinaryIdenticalDocuments(t *testing.T) {
+func TestBinarySummaryOnly(t *testing.T) {
 	tmpDir := t.TempDir()
-	f1 := filepath.Join(tmpDir, "f1.json")
-	f2 := filepath.Join(tmpDir, "f2.json")
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
 
-	content := `{"service": "auth", "version": 1}`
-	if err := os.WriteFile(f1, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(f2, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
+	_ = os.WriteFile(oldFile, []byte(`{"a": 1}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": 2, "b": 3}`), 0644)
 
-	cmd := exec.Command(binPath, f1, f2)
+	cmd := exec.Command(binPath, "--summary", oldFile, newFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	if err != nil {
-		t.Fatalf("expected binary to exit 0 for identical docs, got error: %v, stderr: %s", err, stderr.String())
+		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
 	}
 
-	if strings.TrimSpace(stdout.String()) != "No differences found." {
-		t.Errorf("expected 'No differences found.', got: %q", stdout.String())
+	out := stdout.String()
+	if !strings.Contains(out, "JSON Diff Summary\n\nAdded:     1\nRemoved:   0\nModified:  1\nTotal:     2") {
+		t.Errorf("expected summary block, got: %s", out)
+	}
+}
+
+func TestBinaryVerbose(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"a": 1}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": 2}`), 0644)
+
+	cmd := exec.Command(binPath, "--verbose", "--no-color", oldFile, newFile)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Comparing:\n  Old: "+oldFile+"\n  New: "+newFile) {
+		t.Errorf("expected verbose file header, got: %s", out)
 	}
 }

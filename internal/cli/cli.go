@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"jdiff/internal/diff"
+	"jdiff/internal/render"
 	"jdiff/internal/version"
 )
 
@@ -22,11 +23,15 @@ const (
 const HelpText = `jdiff - JSON Structural Diff
 
 Usage:
-  jdiff <old.json> <new.json>
+  jdiff [options] <old.json> <new.json>
 
-Commands:
+Options:
   --help       Show help
   --version    Show version
+  --no-color   Disable colored output
+  --compact    Display compact diff output
+  --verbose    Display additional comparison information
+  --summary    Display only the change summary
 `
 
 // CLI encapsulates CLI options and standard streams.
@@ -51,36 +56,43 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
-	// Handle flags and commands
-	switch strings.TrimSpace(args[0]) {
-	case "--help", "-h", "help":
-		fmt.Fprint(c.Stdout, HelpText)
-		return ExitCodeOK
-	case "--version", "-v", "version":
-		fmt.Fprintf(c.Stdout, "jdiff %s\n", version.Short())
-		return ExitCodeOK
+	var (
+		noColor     bool
+		compact     bool
+		verbose     bool
+		summaryOnly bool
+		positional  []string
+	)
+
+	// Determine initial default color capability
+	defaultColor := true
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		defaultColor = false
 	}
 
-	// Check if --version or --help appears anywhere in args
 	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+		switch arg {
+		case "--help", "-h", "help":
 			fmt.Fprint(c.Stdout, HelpText)
 			return ExitCodeOK
-		}
-		if arg == "--version" || arg == "-v" {
+		case "--version", "-v", "version":
 			fmt.Fprintf(c.Stdout, "jdiff %s\n", version.Short())
 			return ExitCodeOK
+		case "--no-color":
+			noColor = true
+		case "--compact":
+			compact = true
+		case "--verbose":
+			verbose = true
+		case "--summary":
+			summaryOnly = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(c.Stderr, "jdiff: unknown flag %q\n\n%s", arg, HelpText)
+				return ExitCodeError
+			}
+			positional = append(positional, arg)
 		}
-	}
-
-	// Check positional arguments and flags
-	var positional []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			fmt.Fprintf(c.Stderr, "jdiff: unknown flag %q\n\n%s", arg, HelpText)
-			return ExitCodeError
-		}
-		positional = append(positional, arg)
 	}
 
 	if len(positional) < 2 {
@@ -102,7 +114,6 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
-	// Pre-validate JSON for specific error messaging per file
 	var testVal any
 	if err := json.Unmarshal(oldBytes, &testVal); err != nil {
 		fmt.Fprintf(c.Stderr, "jdiff: invalid JSON in %s: %v\n", oldPath, err)
@@ -126,8 +137,19 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
-	if err := res.Format(c.Stdout); err != nil {
-		fmt.Fprintf(c.Stderr, "jdiff: error writing output: %v\n", err)
+	useColor := defaultColor && !noColor
+
+	renderOpts := render.Options{
+		Color:       useColor,
+		Compact:     compact,
+		Verbose:     verbose,
+		SummaryOnly: summaryOnly,
+		OldFile:     oldPath,
+		NewFile:     newPath,
+	}
+
+	if err := render.Render(c.Stdout, res, renderOpts); err != nil {
+		fmt.Fprintf(c.Stderr, "jdiff: error rendering output: %v\n", err)
 		return ExitCodeError
 	}
 

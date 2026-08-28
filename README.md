@@ -1,30 +1,24 @@
 # jdiff
 
-A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking.
+A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking and rich presentation modes.
 
-**Current Version:** `v0.3.0`
+**Current Version:** `v0.4.0`
 
 ## Features
 
-- **Deep Recursive Comparison**: Recursively traverses nested JSON structures to any depth and pinpoints the exact changed leaf values.
-- **Precise JSON Path Engine**: Tracks dot-separated paths (e.g. `user.profile.contact.email`, `(root)` for document root).
-- **Structural Delta Classification**: Distinguishes added properties, removed properties, modified primitive values, and new/removed nested sub-objects.
-- **Explicit Type Change Detection**: Identifies type shifts between strings, numbers, booleans, null, objects, and arrays (e.g. `20` -> `"20"`).
-- **Root Value Support**: Safely compares root primitives (`"hello"`, `10`, `true`, `null`), root arrays, and root objects.
-- **Deterministic Traversal & Ordering**: Guarantees identical, predictable diff output across runs by sorting paths alphabetically.
-- **Change Summary Statistics**: Displays a concise summary of added, removed, and modified counts, or `No differences found.` when identical.
-- **Unchanged Value Suppression**: Omits matching keys by default to keep terminal diffs clean and actionable.
-- **Zero External Dependencies**: Implemented entirely with Go standard library components.
-
-## Supported JSON Structures (v0.3.0)
-
-- **Objects**: Flat, nested, and deeply nested objects of arbitrary depth.
-- **Strings**: Quoted string comparisons.
-- **Numbers**: Floating-point and integer numbers with full precision preservation (`json.Number`).
-- **Booleans**: `true` and `false` literals.
-- **Null Values**: `null` literal support.
-- **Arrays**: Deterministic whole-value equality comparison (see [Limitations](#current-limitations)).
-- **Root Primitives**: JSON documents containing a single primitive, array, or null as the root.
+- **Semantic ANSI Color Highlighting**: Added values in green (`+`), removed values in red (`-`), modified values in yellow, and path identifiers in cyan.
+- **Multiple Presentation Modes**:
+  - **Standard**: Human-readable hierarchical diff with change summaries.
+  - **Compact (`--compact`)**: Streamlined single-line representations per modification (`MODIFIED user.age: 19 → 20`).
+  - **Summary-Only (`--summary`)**: Displays only high-level change counters and totals.
+  - **Verbose (`--verbose`)**: Includes file paths and comparison context.
+- **Color Safety & CI/CD Support (`--no-color`)**: Automatic color detection with explicit `--no-color` override and standard `NO_COLOR` environment variable support.
+- **Deep Recursive Comparison**: Traverses nested JSON structures to any depth without falsely reporting parent nodes.
+- **Precise JSON Path Engine**: Tracks dot-separated paths (e.g. `user.profile.contact.email`).
+- **Explicit Type Change Detection**: Identifies type shifts between strings, numbers, booleans, null, objects, and arrays.
+- **Root JSON Value Support**: Compares root primitives (`"hello"`, `10`, `true`, `null`), arrays, and objects safely.
+- **Deterministic Traversal & Ordering**: Predictable alphabetical key and path ordering across all executions.
+- **Zero External Dependencies**: Built entirely with the Go standard library.
 
 ## Installation
 
@@ -43,83 +37,111 @@ go build -o jdiff .
 ## Usage
 
 ```bash
-jdiff <old.json> <new.json>
+jdiff [options] <old.json> <new.json>
 ```
 
 ### Options & Flags
 
+| Flag | Description |
+|---|---|
+| `--help`, `-h` | Display usage and available options |
+| `--version`, `-v` | Display application version (`jdiff v0.4.0`) |
+| `--no-color` | Disable ANSI terminal color escape sequences |
+| `--compact` | Display compact single-line diffs |
+| `--verbose` | Include comparison file context before diff output |
+| `--summary` | Suppress individual change diffs and display only the summary counts |
+
+---
+
+## Output Examples
+
+### 1. Standard Mode (Default)
+
 ```bash
-jdiff --help       # Show help and usage instructions
-jdiff --version    # Show application version (v0.3.0)
+jdiff examples/basic-old.json examples/basic-new.json
 ```
 
-### Example 1: Deeply Nested Changes
-
-Comparing [`examples/nested-old.json`](examples/nested-old.json) and [`examples/nested-new.json`](examples/nested-new.json):
-
-```bash
-jdiff examples/nested-old.json examples/nested-new.json
-```
-
-**Output**:
 ```text
 MODIFIED
-  user.preferences.theme
-    - "light"
-    + "dark"
+  age
+    - 19
+    + 20
 
-  user.profile.age
-    - 28
-    + 29
-
-  user.profile.contact.email
-    - "john.old@example.com"
-    + "john.new@example.com"
+  city
+    - "Kochi"
+    + "Bengaluru"
 
 ADDED
-  user.profile.address
-    + {"city":"Bengaluru","country":"India"}
-
-REMOVED
-  user.profile.contact.phone
-    - "+1-555-0100"
+  country
+    + "India"
 
 Summary:
   Added:     1
-  Removed:   1
-  Modified:  3
+  Removed:   0
+  Modified:  2
 ```
 
-### Example 2: Identical Documents
+### 2. Compact Mode (`--compact`)
 
 ```bash
-jdiff f1.json f1.json
+jdiff --compact examples/basic-old.json examples/basic-new.json
 ```
 
-**Output**:
 ```text
-No differences found.
+MODIFIED age: 19 → 20
+MODIFIED city: "Kochi" → "Bengaluru"
+ADDED country: "India"
+
+Summary:
+  Added:     1
+  Removed:   0
+  Modified:  2
 ```
+
+### 3. Summary-Only Mode (`--summary`)
+
+```bash
+jdiff --summary examples/basic-old.json examples/basic-new.json
+```
+
+```text
+JSON Diff Summary
+
+Added:     1
+Removed:   0
+Modified:  2
+Total:     3
+```
+
+### 4. CI/CD & Scripting (`--no-color`)
+
+```bash
+jdiff --no-color --compact old.json new.json
+```
+
+Ensures clean, plain-text output without ANSI escape characters for log files and automated diff pipelines.
+
+---
 
 ## Exit Codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Command completed successfully (diff output or help/version printed) |
+| `0` | Command completed successfully (diff executed or help/version printed) |
 | `1` | Operational error (missing arguments, unreadable files, invalid JSON syntax) |
 
 ## Current Limitations
 
-- **Array Comparison**: In version `v0.3.0`, arrays are compared as complete values. If elements inside an array differ, the array path is reported as modified. Fine-grained element tracking, longest-common-subsequence (LCS) alignment, item insertions/deletions within arrays, and item reordering detection are planned for upcoming releases.
-- **Color Themes & Output Formats**: Output is currently formatted in human-readable plain terminal text. ANSI color syntax and JSON Patch (RFC 6902) format are planned for future versions.
+- **Array Comparison**: In version `v0.4.0`, arrays are evaluated using deterministic whole-value equality. If elements within an array differ, the entire array is flagged as modified. Fine-grained element tracking, longest-common-subsequence (LCS) alignment, item insertions/deletions, and item reordering detection are planned for v0.5.0.
+- **Machine-Readable Formats**: Output currently focuses on human-readable terminal presentations. JSON Patch (RFC 6902) export is scheduled for upcoming releases.
 
 ## Roadmap
 
 - [x] **v0.1.0**: CLI scaffolding, versioning, documentation, test harness.
 - [x] **v0.2.0**: Core structural diff engine, object traversal, primitive comparisons, deterministic output.
 - [x] **v0.3.0**: Deep recursive comparison, JSON Path engine, root primitive support, explicit type change detection, change summaries.
-- [ ] **v0.4.0**: Advanced array diffing (element alignment, insertions, deletions, reordering).
-- [ ] **v0.5.0**: Terminal ANSI color themes and customizable formatting flags.
+- [x] **v0.4.0**: Professional terminal presentation (ANSI colors, `--no-color`, `--compact`, `--verbose`, `--summary`).
+- [ ] **v0.5.0**: Advanced array diffing (element alignment, insertions, deletions, reordering).
 - [ ] **v0.6.0**: Standardized JSON Patch (RFC 6902) export.
 
 ## Development & Testing
@@ -136,6 +158,38 @@ go test -v ./...
 
 # Build binary
 go build ./...
+```
+
+## Project Structure
+
+```text
+jdiff/
+├── cmd/
+│   └── jdiff/
+│       └── main.go              # Canonical command entry point
+├── internal/
+│   ├── cli/
+│   │   ├── cli.go               # Command-line interface and flag handling
+│   │   └── cli_test.go          # CLI unit tests
+│   ├── diff/
+│   │   ├── diff.go              # Deep structural diff engine
+│   │   ├── diff_test.go         # Diff engine unit tests
+│   │   └── path.go              # Structured JSON Path representation
+│   ├── render/
+│   │   ├── render.go            # Presentation layer (ANSI colors, compact, verbose, summary)
+│   │   └── render_test.go       # Render unit tests
+│   └── version/
+│       ├── version.go           # Version and build metadata
+│       └── version_test.go      # Version tests
+├── docs/                        # Architecture and reference documentation
+├── examples/                    # Sample JSON datasets
+├── tests/                       # Integration test suite
+├── go.mod                       # Go module definition
+├── main.go                      # Root application entry point
+├── README.md                    # Project documentation
+├── CONTRIBUTING.md              # Contribution guidelines
+├── LICENSE                      # License terms
+└── .gitignore                   # Ignored files
 ```
 
 ## License
