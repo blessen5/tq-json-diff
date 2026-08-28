@@ -34,7 +34,7 @@ func TestCLIHelp(t *testing.T) {
 			if !strings.Contains(out, "jdiff [options] <old.json> <new.json>") {
 				t.Errorf("expected stdout to contain usage, got: %s", out)
 			}
-			if !strings.Contains(out, "--stats") || !strings.Contains(out, "--max-file-size") || !strings.Contains(out, "--quiet") {
+			if !strings.Contains(out, "--stats") || !strings.Contains(out, "--max-file-size") || !strings.Contains(out, "--max-depth") {
 				t.Errorf("expected stdout to document new options, got: %s", out)
 			}
 			if stderr.Len() > 0 {
@@ -66,13 +66,33 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.9.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.9.0', got: %q", out)
+			if out != "jdiff v1.0.0" {
+				t.Errorf("expected stdout to be 'jdiff v1.0.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestCLIMaxDepth(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"a": {"b": {"c": 1}}}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": {"b": {"c": 2}}}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--max-depth", "1", oldFile, newFile})
+	if code != ExitCodeError {
+		t.Fatalf("expected ExitCodeError (2) when depth exceeded, got: %d", code)
+	}
+	if !strings.Contains(stderr.String(), "maximum recursion depth (1) exceeded") {
+		t.Errorf("expected depth exceeded error in stderr, got: %s", stderr.String())
 	}
 }
 
