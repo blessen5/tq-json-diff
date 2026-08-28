@@ -34,7 +34,9 @@ func TestCLIHelp(t *testing.T) {
 				t.Errorf("expected stdout to contain usage, got: %s", out)
 			}
 			if !strings.Contains(out, "--no-color") || !strings.Contains(out, "--compact") ||
-				!strings.Contains(out, "--verbose") || !strings.Contains(out, "--summary") {
+				!strings.Contains(out, "--verbose") || !strings.Contains(out, "--summary") ||
+				!strings.Contains(out, "--ignore") || !strings.Contains(out, "--config") ||
+				!strings.Contains(out, "--show-config") {
 				t.Errorf("expected stdout to document all options, got: %s", out)
 			}
 			if stderr.Len() > 0 {
@@ -66,14 +68,98 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.5.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.5.0', got: %q", out)
+			if out != "jdiff v0.6.0" {
+				t.Errorf("expected stdout to be 'jdiff v0.6.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
 			}
 		})
 	}
+}
+
+func TestCLIIgnoreFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"name": "App", "timestamp": "2026-01-01"}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"name": "App", "timestamp": "2026-08-01"}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--ignore", "timestamp", oldFile, newFile})
+	if code != ExitCodeOK {
+		t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
+	}
+
+	out := strings.TrimSpace(stdout.String())
+	if out != "No differences found." {
+		t.Errorf("expected 'No differences found.', got: %q", out)
+	}
+}
+
+func TestCLIShowConfig(t *testing.T) {
+	t.Run("empty config", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		c := New(&stdout, &stderr)
+
+		code := c.Run([]string{"--show-config"})
+		if code != ExitCodeOK {
+			t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
+		}
+		if strings.TrimSpace(stdout.String()) != "No ignore rules configured." {
+			t.Errorf("unexpected output: %s", stdout.String())
+		}
+	})
+
+	t.Run("with cli rules and config file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgFile := filepath.Join(tmpDir, "custom.json")
+		_ = os.WriteFile(cfgFile, []byte(`{"ignore": ["*.updated_at", "users[*].id"]}`), 0644)
+
+		var stdout, stderr bytes.Buffer
+		c := New(&stdout, &stderr)
+
+		code := c.Run([]string{"--config", cfgFile, "--ignore", "timestamp", "--show-config"})
+		if code != ExitCodeOK {
+			t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "Ignore rules:\n  timestamp\n  *.updated_at\n  users[*].id") {
+			t.Errorf("expected merged active rules in stdout, got:\n%s", out)
+		}
+	})
+}
+
+func TestCLIConfigErrors(t *testing.T) {
+	t.Run("missing config file argument", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		c := New(&stdout, &stderr)
+		code := c.Run([]string{"--config"})
+		if code != ExitCodeError {
+			t.Errorf("expected error, got %d", code)
+		}
+	})
+
+	t.Run("nonexistent config file", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		c := New(&stdout, &stderr)
+		code := c.Run([]string{"--config", "nonexistent.json", "f1.json", "f2.json"})
+		if code != ExitCodeError {
+			t.Errorf("expected error, got %d", code)
+		}
+	})
+
+	t.Run("invalid ignore syntax", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		c := New(&stdout, &stderr)
+		code := c.Run([]string{"--ignore", "users[abc]", "f1.json", "f2.json"})
+		if code != ExitCodeError {
+			t.Errorf("expected error, got %d", code)
+		}
+	})
 }
 
 func TestCLINoArgs(t *testing.T) {

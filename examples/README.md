@@ -1,80 +1,64 @@
 # jdiff Examples
 
-This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, and arrays.
+This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, arrays, and selective ignore rules.
 
 ## Available Examples
 
 - [`basic-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-old.json) & [`basic-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/basic-new.json)
 - [`nested-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-old.json) & [`nested-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/nested-new.json)
 - [`arrays-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/arrays-old.json) & [`arrays-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/arrays-new.json)
+- [`ignore-old.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/ignore-old.json) & [`ignore-new.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/ignore-new.json)
+- [`.jdiff.json`](file:///c:/Users/bless/OneDrive/Desktop/tq-json-diff/examples/.jdiff.json)
 
 ---
 
-## Array Comparison Demonstrations (v0.5.0)
+## Selective Comparison Demonstrations (v0.6.0)
 
-### 1. Default Mode
+### 1. Without Ignore Rules (Full Diff)
 ```bash
-jdiff examples/arrays-old.json examples/arrays-new.json
+jdiff examples/ignore-old.json examples/ignore-new.json
 ```
 
-Output:
+Outputs modifications across `timestamp`, `request_id`, `metadata.updated_at`, `users[0].session_id`, `users[1].session_id`, `users[0].name`, and `version`.
+
+### 2. Using CLI `--ignore` Flag
+```bash
+jdiff --ignore timestamp --ignore request_id examples/ignore-old.json examples/ignore-new.json
+```
+
+### 3. Using Configuration File (`--config`)
+```bash
+jdiff --config examples/.jdiff.json examples/ignore-old.json examples/ignore-new.json
+```
+
+**Output**:
 ```text
 MODIFIED
-  languages[1]
-    - "Python"
-    + "Rust"
+  users[0].name
+    - "Alice"
+    + "Alice Cooper"
 
-  maintainers[0].role
-    - "Lead"
-    + "Creator"
-
-ADDED
-  languages[3]
-    + "TypeScript"
-
-  maintainers[2]
-    + {"name":"Bob","role":"Reviewer"}
-
-REMOVED
-  features[2]
-    - "ansi-colors"
+  version
+    - "v0.5.0"
+    + "v0.6.0"
 
 Summary:
-  Added:     2
-  Removed:   1
+  Added:     0
+  Removed:   0
   Modified:  2
+  Ignored:   5
 ```
 
-### 2. Compact Mode (`--compact`)
+### 4. Viewing Active Rules (`--show-config`)
 ```bash
-jdiff --compact examples/arrays-old.json examples/arrays-new.json
+jdiff --config examples/.jdiff.json --show-config
 ```
 
-Output:
+**Output**:
 ```text
-MODIFIED languages[1]: "Python" → "Rust"
-ADDED languages[3]: "TypeScript"
-MODIFIED maintainers[0].role: "Lead" → "Creator"
-ADDED maintainers[2]: {"name":"Bob","role":"Reviewer"}
-REMOVED features[2]: "ansi-colors"
-
-Summary:
-  Added:     2
-  Removed:   1
-  Modified:  2
-```
-
-### 3. Summary-Only Mode (`--summary`)
-```bash
-jdiff --summary examples/arrays-old.json examples/arrays-new.json
-```
-
-Output:
-```text
-JSON Diff Summary
-
-Added:     2
-Removed:   1
-Modified:  2
-Total:     5
+Ignore rules:
+  timestamp
+  request_id
+  *.updated_at
+  users[*].session_id
 ```

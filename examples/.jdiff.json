@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "timestamp",
+    "request_id",
+    "*.updated_at",
+    "users[*].session_id"
+  ]
+}
