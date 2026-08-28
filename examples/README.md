@@ -1,6 +1,6 @@
 # jdiff Examples
 
-This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, arrays, ignore rules, and output formats.
+This directory contains sample JSON pairs demonstrating structural differences across various JSON data types, depths, arrays, ignore rules, output formats, and JSON Patch generation.
 
 ## Available Examples
 
@@ -13,82 +13,20 @@ This directory contains sample JSON pairs demonstrating structural differences a
 
 ---
 
-## Output Formats (v0.7.0)
+## JSON Patch Generation & Application (v0.8.0)
 
-### 1. Human (Default)
+### 1. Generate Patch
 ```bash
-jdiff --output human examples/output-old.json examples/output-new.json
+jdiff --output patch examples/output-old.json examples/output-new.json
 ```
 
-### 2. Machine-Readable JSON
+### 2. Verify Patch
 ```bash
-jdiff --output json examples/output-old.json examples/output-new.json
+jdiff --verify-patch examples/output-old.json examples/output-new.json
 ```
 
-**Output**:
-```json
-{
-  "summary": {
-    "added": 1,
-    "ignored": 0,
-    "modified": 3,
-    "removed": 0,
-    "total": 4
-  },
-  "changes": [
-    {
-      "new": true,
-      "old": false,
-      "path": "config.debug",
-      "type": "modified"
-    },
-    {
-      "new": 60,
-      "old": 30,
-      "path": "config.timeout",
-      "type": "modified"
-    },
-    {
-      "new": "/oauth",
-      "path": "endpoints[2]",
-      "type": "added"
-    },
-    {
-      "new": 2,
-      "old": 1,
-      "path": "version",
-      "type": "modified"
-    }
-  ]
-}
-```
-
-### 3. Unified Diff Format
+### 3. Apply Patch
 ```bash
-jdiff --output unified examples/output-old.json examples/output-new.json
-```
-
-**Output**:
-```text
---- examples/output-old.json
-+++ examples/output-new.json
-@@ config.debug
-- false
-+ true
-
-@@ config.timeout
-- 30
-+ 60
-
-@@ endpoints[2]
-+ "/oauth"
-
-@@ version
-- 1
-+ 2
-```
-
-### 4. Stdin Piping & File Redirection
-```bash
-cat examples/output-old.json | jdiff --output json --output-file /tmp/diff.json - examples/output-new.json
+jdiff --output patch --output-file diff.patch.json examples/output-old.json examples/output-new.json
+jdiff apply diff.patch.json examples/output-old.json
 ```

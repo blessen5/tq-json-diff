@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"jdiff/internal/config"
 	"jdiff/internal/diff"
 	"jdiff/internal/matcher"
+	"jdiff/internal/patch"
 	"jdiff/internal/render"
 	"jdiff/internal/version"
 )
@@ -24,12 +27,14 @@ const usage = `jdiff - JSON Structural Diff
 
 Usage:
   jdiff [options] <old.json> <new.json>
+  jdiff apply [options] <patch.json> <input.json>
 
 Options:
   --help                Show help
   --version             Show version
-  --output <format>     Output format: human, json, unified (default: human)
+  --output <format>     Output format: human, json, unified, patch (default: human)
   --output-file <file>  Write output to a file instead of stdout
+  --verify-patch        Generate, apply, and verify the patch
   --no-color            Disable colored output
   --compact             Display compact diff output
   --verbose             Display additional comparison information
@@ -64,11 +69,16 @@ func NewWithStdin(stdin io.Reader, stdout, stderr io.Writer) *CLI {
 	}
 }
 
-// Run parses arguments and executes the diff operation.
+// Run parses arguments and executes the requested operation.
 func (c *CLI) Run(args []string) int {
+	if len(args) > 0 && args[0] == "apply" {
+		return c.runApply(args[1:])
+	}
+
 	var (
 		outputFormatStr string
 		outputFile      string
+		verifyPatch     bool
 		noColor         bool
 		compact         bool
 		verbose         bool
@@ -113,6 +123,8 @@ func (c *CLI) Run(args []string) int {
 			outputFile = args[i]
 		case strings.HasPrefix(arg, "--output-file="):
 			outputFile = strings.TrimPrefix(arg, "--output-file=")
+		case arg == "--verify-patch":
+			verifyPatch = true
 		case arg == "--no-color":
 			noColor = true
 		case arg == "--compact":
@@ -242,6 +254,18 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
+	// Handle --verify-patch
+	if verifyPatch {
+		patchDoc := patch.Generate(diffResult)
+		ok, err := patch.Verify(oldData, newData, patchDoc)
+		if err != nil || !ok {
+			fmt.Fprintln(c.stdout, "Patch verification failed.")
+			return ExitCodeError
+		}
+		fmt.Fprintln(c.stdout, "Patch verification successful.")
+		return ExitCodeOK
+	}
+
 	// Color detection logic
 	colorEnabled := true
 	if noColor || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
@@ -276,6 +300,105 @@ func (c *CLI) Run(args []string) int {
 		return ExitCodeError
 	}
 
+	return ExitCodeOK
+}
+
+func (c *CLI) runApply(args []string) int {
+	var (
+		outputFile  string
+		positionals []string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--output-file":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff apply: missing argument for --output-file")
+				return ExitCodeError
+			}
+			i++
+			outputFile = args[i]
+		case strings.HasPrefix(arg, "--output-file="):
+			outputFile = strings.TrimPrefix(arg, "--output-file=")
+		case arg == "--help" || arg == "-h":
+			fmt.Fprintln(c.stdout, "Usage: jdiff apply [options] <patch.json> <input.json>")
+			return ExitCodeOK
+		case strings.HasPrefix(arg, "-") && arg != "-":
+			fmt.Fprintf(c.stderr, "jdiff apply: unknown flag %q\n", arg)
+			return ExitCodeError
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+
+	if len(positionals) < 2 {
+		fmt.Fprintln(c.stderr, "jdiff apply: missing required arguments: <patch.json> <input.json>")
+		return ExitCodeError
+	}
+	if len(positionals) > 2 {
+		fmt.Fprintln(c.stderr, "jdiff apply: too many arguments provided")
+		return ExitCodeError
+	}
+
+	patchPath := positionals[0]
+	inputPath := positionals[1]
+
+	if patchPath == "-" && inputPath == "-" {
+		fmt.Fprintln(c.stderr, "jdiff apply: cannot read both patch and input from stdin")
+		return ExitCodeError
+	}
+
+	patchData, err := c.readInput(patchPath)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: failed to read patch %s: %v\n", patchPath, err)
+		return ExitCodeError
+	}
+
+	inputData, err := c.readInput(inputPath)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: failed to read input %s: %v\n", inputPath, err)
+		return ExitCodeError
+	}
+
+	var patchDoc patch.Patch
+	if err := json.Unmarshal(patchData, &patchDoc); err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: invalid JSON Patch document: %v\n", err)
+		return ExitCodeError
+	}
+
+	var inputDoc any
+	dec := json.NewDecoder(bytes.NewReader(inputData))
+	dec.UseNumber()
+	if err := dec.Decode(&inputDoc); err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: invalid input JSON document: %v\n", err)
+		return ExitCodeError
+	}
+
+	resultDoc, err := patch.Apply(inputDoc, patchDoc)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: %v\n", err)
+		return ExitCodeError
+	}
+
+	outBytes, err := json.MarshalIndent(resultDoc, "", "  ")
+	if err != nil {
+		fmt.Fprintf(c.stderr, "jdiff apply: failed to format output JSON: %v\n", err)
+		return ExitCodeError
+	}
+
+	outWriter := c.stdout
+	if outputFile != "" {
+		f, err := os.Create(outputFile)
+		if err != nil {
+			fmt.Fprintf(c.stderr, "jdiff apply: failed to create output file %s: %v\n", outputFile, err)
+			return ExitCodeError
+		}
+		defer f.Close()
+		outWriter = f
+	}
+
+	fmt.Fprintln(outWriter, string(outBytes))
 	return ExitCodeOK
 }
 

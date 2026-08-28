@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"jdiff/internal/diff"
+	"jdiff/internal/patch"
 )
 
 // ANSI color escape sequences.
@@ -29,6 +30,8 @@ const (
 	FormatJSON Format = "json"
 	// FormatUnified is a unified diff-style representation.
 	FormatUnified Format = "unified"
+	// FormatPatch is an RFC 6902 JSON Patch document.
+	FormatPatch Format = "patch"
 )
 
 // ParseFormat converts a raw string to a recognized Format.
@@ -40,6 +43,8 @@ func ParseFormat(s string) (Format, error) {
 		return FormatJSON, nil
 	case "unified":
 		return FormatUnified, nil
+	case "patch":
+		return FormatPatch, nil
 	default:
 		return "", fmt.Errorf("unsupported output format: %s", s)
 	}
@@ -64,9 +69,22 @@ func Render(w io.Writer, result *diff.DiffResult, opts Options) error {
 		return renderJSON(w, result, opts)
 	case FormatUnified:
 		return renderUnified(w, result, opts)
+	case FormatPatch:
+		return renderPatch(w, result, opts)
 	default:
 		return renderHuman(w, result, opts)
 	}
+}
+
+// renderPatch outputs an RFC 6902 JSON Patch document.
+func renderPatch(w io.Writer, result *diff.DiffResult, opts Options) error {
+	patchDoc := patch.Generate(result)
+	data, err := json.MarshalIndent(patchDoc, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
 
 // renderJSON outputs machine-readable JSON diff results.

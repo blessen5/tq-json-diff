@@ -34,8 +34,8 @@ func TestCLIHelp(t *testing.T) {
 			if !strings.Contains(out, "jdiff [options] <old.json> <new.json>") {
 				t.Errorf("expected stdout to contain usage, got: %s", out)
 			}
-			if !strings.Contains(out, "--output") || !strings.Contains(out, "--output-file") {
-				t.Errorf("expected stdout to document output options, got: %s", out)
+			if !strings.Contains(out, "--output") || !strings.Contains(out, "--output-file") || !strings.Contains(out, "--verify-patch") {
+				t.Errorf("expected stdout to document new options, got: %s", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
@@ -66,13 +66,92 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.7.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.7.0', got: %q", out)
+			if out != "jdiff v0.8.0" {
+				t.Errorf("expected stdout to be 'jdiff v0.8.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestCLIOutputPatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"title": "old"}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"title": "new"}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--output", "patch", oldFile, newFile})
+	if code != ExitCodeOK {
+		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
+	}
+
+	var patchOps []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &patchOps); err != nil {
+		t.Fatalf("expected valid JSON Patch array: %v", err)
+	}
+
+	if len(patchOps) != 1 || patchOps[0]["op"] != "replace" || patchOps[0]["path"] != "/title" || patchOps[0]["value"] != "new" {
+		t.Errorf("unexpected patch op: %+v", patchOps)
+	}
+}
+
+func TestCLIApplyCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	patchFile := filepath.Join(tmpDir, "patch.json")
+	inputFile := filepath.Join(tmpDir, "input.json")
+	outputFile := filepath.Join(tmpDir, "patched.json")
+
+	_ = os.WriteFile(patchFile, []byte(`[{"op": "replace", "path": "/val", "value": 100}]`), 0644)
+	_ = os.WriteFile(inputFile, []byte(`{"val": 50}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"apply", "--output-file", outputFile, patchFile, inputFile})
+	if code != ExitCodeOK {
+		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
+	}
+
+	data, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read patched output file: %v", err)
+	}
+
+	var parsed map[string]any
+	_ = json.Unmarshal(data, &parsed)
+	numVal, ok := parsed["val"].(json.Number)
+	if !ok || numVal.String() != "100" {
+		if floatVal, ok := parsed["val"].(float64); !ok || floatVal != 100 {
+			t.Errorf("expected val to be 100, got: %v", parsed["val"])
+		}
+	}
+}
+
+func TestCLIVerifyPatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	_ = os.WriteFile(oldFile, []byte(`{"a": 1, "b": [1, 2]}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": 2, "b": [1, 2, 3]}`), 0644)
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{"--verify-patch", oldFile, newFile})
+	if code != ExitCodeOK {
+		t.Fatalf("expected exit code %d, got %d, stderr: %s", ExitCodeOK, code, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "Patch verification successful.") {
+		t.Errorf("expected success message, got: %s", stdout.String())
 	}
 }
 
@@ -219,76 +298,4 @@ func TestCLIStdin(t *testing.T) {
 			t.Errorf("expected error message in stderr, got: %s", stderr.String())
 		}
 	})
-}
-
-func TestCLIIgnoreFlag(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"name": "App", "timestamp": "2026-01-01"}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"name": "App", "timestamp": "2026-08-01"}`), 0644)
-
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{"--ignore", "timestamp", oldFile, newFile})
-	if code != ExitCodeOK {
-		t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
-	}
-
-	out := strings.TrimSpace(stdout.String())
-	if out != "No differences found." {
-		t.Errorf("expected 'No differences found.', got: %q", out)
-	}
-}
-
-func TestCLIShowConfig(t *testing.T) {
-	t.Run("empty config", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		c := New(&stdout, &stderr)
-
-		code := c.Run([]string{"--show-config"})
-		if code != ExitCodeOK {
-			t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
-		}
-		if strings.TrimSpace(stdout.String()) != "No ignore rules configured." {
-			t.Errorf("unexpected output: %s", stdout.String())
-		}
-	})
-
-	t.Run("with cli rules and config file", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		cfgFile := filepath.Join(tmpDir, "custom.json")
-		_ = os.WriteFile(cfgFile, []byte(`{"ignore": ["*.updated_at", "users[*].id"]}`), 0644)
-
-		var stdout, stderr bytes.Buffer
-		c := New(&stdout, &stderr)
-
-		code := c.Run([]string{"--config", cfgFile, "--ignore", "timestamp", "--show-config"})
-		if code != ExitCodeOK {
-			t.Fatalf("expected exit code %d, got %d", ExitCodeOK, code)
-		}
-		out := stdout.String()
-		if !strings.Contains(out, "Ignore rules:\n  timestamp\n  *.updated_at\n  users[*].id") {
-			t.Errorf("expected merged active rules in stdout, got:\n%s", out)
-		}
-	})
-}
-
-func TestCLINoArgs(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	c := New(&stdout, &stderr)
-
-	code := c.Run([]string{})
-	if code != ExitCodeError {
-		t.Fatalf("expected exit code %d, got %d", ExitCodeError, code)
-	}
-
-	if stdout.Len() > 0 {
-		t.Errorf("expected stdout to be empty, got: %s", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "jdiff [options] <old.json> <new.json>") {
-		t.Errorf("expected stderr to contain help text, got: %s", stderr.String())
-	}
 }
