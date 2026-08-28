@@ -44,6 +44,7 @@ Options:
   --stats                Display performance and memory statistics
   --max-file-size <size> Maximum allowed input file size (e.g. 100MB, 10KB, 500B)
   --max-changes <N>      Maximum number of differences to collect before truncating
+  --max-depth <N>        Maximum allowed JSON recursion depth (default: 1000)
   --exit-on-diff         Terminate comparison immediately upon discovering differences
   --quiet, -q            Suppress output and communicate exclusively via exit codes
   --no-color             Disable colored output
@@ -95,6 +96,7 @@ func (c *CLI) Run(args []string) int {
 		showStats       bool
 		maxFileSizeStr  string
 		maxChanges      int
+		maxDepth        int
 		exitOnDiff      bool
 		quiet           bool
 		noColor         bool
@@ -173,6 +175,25 @@ func (c *CLI) Run(args []string) int {
 				return ExitCodeError
 			}
 			maxChanges = val
+		case arg == "--max-depth":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --max-depth")
+				return ExitCodeError
+			}
+			i++
+			val, err := strconv.Atoi(args[i])
+			if err != nil || val <= 0 {
+				fmt.Fprintf(c.stderr, "jdiff: invalid value for --max-depth: %q\n", args[i])
+				return ExitCodeError
+			}
+			maxDepth = val
+		case strings.HasPrefix(arg, "--max-depth="):
+			val, err := strconv.Atoi(strings.TrimPrefix(arg, "--max-depth="))
+			if err != nil || val <= 0 {
+				fmt.Fprintf(c.stderr, "jdiff: invalid value for --max-depth: %q\n", arg)
+				return ExitCodeError
+			}
+			maxDepth = val
 		case arg == "--exit-on-diff":
 			exitOnDiff = true
 		case arg == "--quiet" || arg == "-q":
@@ -336,6 +357,7 @@ func (c *CLI) Run(args []string) int {
 	diffResult, err := diff.CompareBytesWithOptions(oldData, newData, diff.Options{
 		Matcher:    pathMatcher,
 		MaxChanges: maxChanges,
+		MaxDepth:   maxDepth,
 		EarlyExit:  exitOnDiff,
 	})
 	if err != nil {
