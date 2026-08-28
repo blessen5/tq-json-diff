@@ -8,7 +8,7 @@ import (
 
 var (
 	// Version holds the current application version.
-	Version = "v0.5.0"
+	Version = "v0.6.0"
 
 	// GitCommit holds the git commit hash at build time.
 	GitCommit = "none"
