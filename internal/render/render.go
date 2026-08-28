@@ -8,165 +8,226 @@ import (
 	"jdiff/internal/diff"
 )
 
-// ANSI color codes
+// ANSI color escape sequences.
 const (
-	ansiReset  = "\033[0m"
-	ansiBold   = "\033[1m"
-	ansiRed    = "\033[31m"
-	ansiGreen  = "\033[32m"
-	ansiYellow = "\033[33m"
-	ansiCyan   = "\033[36m"
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorCyan   = "\033[36m"
+	colorBold   = "\033[1m"
 )
 
-// Options specifies rendering configurations for diff presentation.
+// Options configures terminal rendering presentation behavior.
 type Options struct {
-	Color       bool
-	Compact     bool
-	Verbose     bool
-	SummaryOnly bool
-	OldFile     string
-	NewFile     string
+	Color        bool
+	Compact      bool
+	Verbose      bool
+	SummaryOnly  bool
+	OldPath      string
+	NewPath      string
+	IgnoredRules []string
 }
 
-// colorize applies ANSI color codes if color is enabled.
-func colorize(text, code string, enabled bool) string {
-	if !enabled {
-		return text
-	}
-	return code + text + ansiReset
-}
-
-// Render formats and writes the diff result according to the specified options.
-func Render(w io.Writer, res *diff.DiffResult, opts Options) error {
-	summary := res.Summary()
-	total := summary.Added + summary.Removed + summary.Modified
-
-	// 1. Summary-only mode
+// Render formats a DiffResult to the provided writer according to Options.
+func Render(w io.Writer, result *diff.DiffResult, opts Options) error {
+	// Case 1: Summary-Only presentation mode
 	if opts.SummaryOnly {
-		var sb strings.Builder
-		sb.WriteString("JSON Diff Summary\n\n")
-		sb.WriteString(fmt.Sprintf("Added:     %d\n", summary.Added))
-		sb.WriteString(fmt.Sprintf("Removed:   %d\n", summary.Removed))
-		sb.WriteString(fmt.Sprintf("Modified:  %d\n", summary.Modified))
-		sb.WriteString(fmt.Sprintf("Total:     %d\n", total))
-		_, err := fmt.Fprint(w, sb.String())
+		return renderSummaryOnly(w, result, opts)
+	}
+
+	// Case 2: No differences detected
+	if !result.HasChanges() {
+		if opts.Verbose {
+			renderVerboseHeader(w, opts)
+		}
+		_, err := fmt.Fprintln(w, "No differences found.")
 		return err
 	}
 
 	var sb strings.Builder
 
-	// 2. Verbose file comparison header
+	// Verbose Header
 	if opts.Verbose {
-		sb.WriteString("Comparing:\n")
-		sb.WriteString(fmt.Sprintf("  Old: %s\n", opts.OldFile))
-		sb.WriteString(fmt.Sprintf("  New: %s\n\n", opts.NewFile))
-		if res.HasChanges() {
-			sb.WriteString("Changes:\n")
-		}
+		renderVerboseHeaderToString(&sb, opts)
+		sb.WriteString("Changes:\n")
 	}
 
-	// 3. No changes case
-	if !res.HasChanges() {
-		sb.WriteString("No differences found.\n")
-		_, err := fmt.Fprint(w, sb.String())
-		return err
-	}
-
-	// 4. Compact presentation mode
+	// Case 3: Compact presentation mode
 	if opts.Compact {
-		for _, c := range res.Changes {
-			switch c.Type {
-			case diff.ChangeModified:
-				tag := colorize("MODIFIED", ansiYellow, opts.Color)
-				path := colorize(c.Path.String(), ansiCyan, opts.Color)
-				oldVal := colorize(diff.FormatValue(c.OldValue), ansiRed, opts.Color)
-				newVal := colorize(diff.FormatValue(c.NewValue), ansiGreen, opts.Color)
-				sb.WriteString(fmt.Sprintf("%s %s: %s → %s\n", tag, path, oldVal, newVal))
-			case diff.ChangeAdded:
-				tag := colorize("ADDED", ansiGreen, opts.Color)
-				path := colorize(c.Path.String(), ansiCyan, opts.Color)
-				newVal := colorize(diff.FormatValue(c.NewValue), ansiGreen, opts.Color)
-				sb.WriteString(fmt.Sprintf("%s %s: %s\n", tag, path, newVal))
-			case diff.ChangeRemoved:
-				tag := colorize("REMOVED", ansiRed, opts.Color)
-				path := colorize(c.Path.String(), ansiCyan, opts.Color)
-				oldVal := colorize(diff.FormatValue(c.OldValue), ansiRed, opts.Color)
-				sb.WriteString(fmt.Sprintf("%s %s: %s\n", tag, path, oldVal))
-			}
-		}
-		sb.WriteString("\nSummary:\n")
-		sb.WriteString(fmt.Sprintf("  Added:     %d\n", summary.Added))
-		sb.WriteString(fmt.Sprintf("  Removed:   %d\n", summary.Removed))
-		sb.WriteString(fmt.Sprintf("  Modified:  %d\n", summary.Modified))
-
-		_, err := fmt.Fprint(w, sb.String())
-		return err
+		renderCompactToString(&sb, result, opts)
+	} else {
+		// Case 4: Standard hierarchical presentation mode
+		renderStandardToString(&sb, result, opts)
 	}
 
-	// 5. Standard structured presentation mode
-	var sections []string
+	// Summary Footer
+	renderSummaryFooterToString(&sb, result, opts)
 
-	modified := res.Modified()
+	_, err := fmt.Fprint(w, sb.String())
+	return err
+}
+
+func renderVerboseHeader(w io.Writer, opts Options) {
+	var sb strings.Builder
+	renderVerboseHeaderToString(&sb, opts)
+	_, _ = fmt.Fprint(w, sb.String())
+}
+
+func renderVerboseHeaderToString(sb *strings.Builder, opts Options) {
+	if len(opts.IgnoredRules) > 0 {
+		sb.WriteString("Ignoring:\n")
+		for _, r := range opts.IgnoredRules {
+			sb.WriteString(fmt.Sprintf("  %s\n", r))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Comparing:\n")
+	sb.WriteString(fmt.Sprintf("  Old: %s\n", opts.OldPath))
+	sb.WriteString(fmt.Sprintf("  New: %s\n\n", opts.NewPath))
+}
+
+func renderCompactToString(sb *strings.Builder, result *diff.DiffResult, opts Options) {
+	for _, c := range result.Changes {
+		pathStr := c.Path.String()
+		if opts.Color {
+			pathStr = colorCyan + pathStr + colorReset
+		}
+
+		switch c.Type {
+		case diff.ChangeModified:
+			tag := "MODIFIED"
+			if opts.Color {
+				tag = colorYellow + colorBold + tag + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("%s %s: %s → %s\n", tag, pathStr, diff.FormatValue(c.OldValue), diff.FormatValue(c.NewValue)))
+
+		case diff.ChangeAdded:
+			tag := "ADDED"
+			if opts.Color {
+				tag = colorGreen + colorBold + tag + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("%s %s: %s\n", tag, pathStr, diff.FormatValue(c.NewValue)))
+
+		case diff.ChangeRemoved:
+			tag := "REMOVED"
+			if opts.Color {
+				tag = colorRed + colorBold + tag + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("%s %s: %s\n", tag, pathStr, diff.FormatValue(c.OldValue)))
+		}
+	}
+	sb.WriteString("\n")
+}
+
+func renderStandardToString(sb *strings.Builder, result *diff.DiffResult, opts Options) {
+	modified := result.Modified()
 	if len(modified) > 0 {
-		var sec strings.Builder
-		sec.WriteString(colorize("MODIFIED", ansiYellow, opts.Color) + "\n")
+		tag := "MODIFIED"
+		if opts.Color {
+			tag = colorYellow + colorBold + tag + colorReset
+		}
+		sb.WriteString(tag + "\n")
 		for i, c := range modified {
-			pathStr := colorize(c.Path.String(), ansiCyan, opts.Color)
-			oldStr := colorize("- "+diff.FormatValue(c.OldValue), ansiRed, opts.Color)
-			newStr := colorize("+ "+diff.FormatValue(c.NewValue), ansiGreen, opts.Color)
-
-			sec.WriteString(fmt.Sprintf("  %s\n", pathStr))
-			sec.WriteString(fmt.Sprintf("    %s\n", oldStr))
-			sec.WriteString(fmt.Sprintf("    %s", newStr))
+			pathStr := c.Path.String()
+			if opts.Color {
+				pathStr = colorCyan + pathStr + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("  %s\n", pathStr))
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("    %s- %s%s\n", colorRed, diff.FormatValue(c.OldValue), colorReset))
+				sb.WriteString(fmt.Sprintf("    %s+ %s%s", colorGreen, diff.FormatValue(c.NewValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("    - %s\n", diff.FormatValue(c.OldValue)))
+				sb.WriteString(fmt.Sprintf("    + %s", diff.FormatValue(c.NewValue)))
+			}
 			if i < len(modified)-1 {
-				sec.WriteString("\n\n")
+				sb.WriteString("\n\n")
 			}
 		}
-		sections = append(sections, sec.String())
+		sb.WriteString("\n\n")
 	}
 
-	added := res.Added()
+	added := result.Added()
 	if len(added) > 0 {
-		var sec strings.Builder
-		sec.WriteString(colorize("ADDED", ansiGreen, opts.Color) + "\n")
+		tag := "ADDED"
+		if opts.Color {
+			tag = colorGreen + colorBold + tag + colorReset
+		}
+		sb.WriteString(tag + "\n")
 		for i, c := range added {
-			pathStr := colorize(c.Path.String(), ansiCyan, opts.Color)
-			newStr := colorize("+ "+diff.FormatValue(c.NewValue), ansiGreen, opts.Color)
-
-			sec.WriteString(fmt.Sprintf("  %s\n", pathStr))
-			sec.WriteString(fmt.Sprintf("    %s", newStr))
+			pathStr := c.Path.String()
+			if opts.Color {
+				pathStr = colorCyan + pathStr + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("  %s\n", pathStr))
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("    %s+ %s%s", colorGreen, diff.FormatValue(c.NewValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("    + %s", diff.FormatValue(c.NewValue)))
+			}
 			if i < len(added)-1 {
-				sec.WriteString("\n\n")
+				sb.WriteString("\n\n")
 			}
 		}
-		sections = append(sections, sec.String())
+		sb.WriteString("\n\n")
 	}
 
-	removed := res.Removed()
+	removed := result.Removed()
 	if len(removed) > 0 {
-		var sec strings.Builder
-		sec.WriteString(colorize("REMOVED", ansiRed, opts.Color) + "\n")
+		tag := "REMOVED"
+		if opts.Color {
+			tag = colorRed + colorBold + tag + colorReset
+		}
+		sb.WriteString(tag + "\n")
 		for i, c := range removed {
-			pathStr := colorize(c.Path.String(), ansiCyan, opts.Color)
-			oldStr := colorize("- "+diff.FormatValue(c.OldValue), ansiRed, opts.Color)
-
-			sec.WriteString(fmt.Sprintf("  %s\n", pathStr))
-			sec.WriteString(fmt.Sprintf("    %s", oldStr))
+			pathStr := c.Path.String()
+			if opts.Color {
+				pathStr = colorCyan + pathStr + colorReset
+			}
+			sb.WriteString(fmt.Sprintf("  %s\n", pathStr))
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("    %s- %s%s", colorRed, diff.FormatValue(c.OldValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("    - %s", diff.FormatValue(c.OldValue)))
+			}
 			if i < len(removed)-1 {
-				sec.WriteString("\n\n")
+				sb.WriteString("\n\n")
 			}
 		}
-		sections = append(sections, sec.String())
+		sb.WriteString("\n\n")
 	}
+}
 
-	var sumSec strings.Builder
-	sumSec.WriteString("Summary:\n")
-	sumSec.WriteString(fmt.Sprintf("  Added:     %d\n", summary.Added))
-	sumSec.WriteString(fmt.Sprintf("  Removed:   %d\n", summary.Removed))
-	sumSec.WriteString(fmt.Sprintf("  Modified:  %d", summary.Modified))
-	sections = append(sections, sumSec.String())
+func renderSummaryFooterToString(sb *strings.Builder, result *diff.DiffResult, opts Options) {
+	summary := result.Summary()
+	sb.WriteString("Summary:\n")
+	sb.WriteString(fmt.Sprintf("  Added:     %d\n", summary.Added))
+	sb.WriteString(fmt.Sprintf("  Removed:   %d\n", summary.Removed))
+	sb.WriteString(fmt.Sprintf("  Modified:  %d", summary.Modified))
+	if summary.Ignored > 0 {
+		sb.WriteString(fmt.Sprintf("\n  Ignored:   %d", summary.Ignored))
+	}
+	sb.WriteString("\n")
+}
 
-	sb.WriteString(strings.Join(sections, "\n\n") + "\n")
+func renderSummaryOnly(w io.Writer, result *diff.DiffResult, opts Options) error {
+	summary := result.Summary()
+	var sb strings.Builder
+	title := "JSON Diff Summary"
+	if opts.Color {
+		title = colorBold + title + colorReset
+	}
+	sb.WriteString(title + "\n\n")
+	sb.WriteString(fmt.Sprintf("Added:     %d\n", summary.Added))
+	sb.WriteString(fmt.Sprintf("Removed:   %d\n", summary.Removed))
+	sb.WriteString(fmt.Sprintf("Modified:  %d\n", summary.Modified))
+	if summary.Ignored > 0 {
+		sb.WriteString(fmt.Sprintf("Ignored:   %d\n", summary.Ignored))
+	}
+	sb.WriteString(fmt.Sprintf("Total:     %d\n", summary.Total()))
+
 	_, err := fmt.Fprint(w, sb.String())
 	return err
 }
