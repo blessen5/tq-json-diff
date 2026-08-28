@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -20,6 +21,142 @@ func sampleDiffResult() *diff.DiffResult {
 			{Path: p3, Type: diff.ChangeRemoved, OldValue: "legacy"},
 		},
 		Ignored: 2,
+	}
+}
+
+func TestParseFormat(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected Format
+		err      bool
+	}{
+		{"", FormatHuman, false},
+		{"human", FormatHuman, false},
+		{"HUMAN", FormatHuman, false},
+		{"json", FormatJSON, false},
+		{"JSON", FormatJSON, false},
+		{"unified", FormatUnified, false},
+		{"xml", "", true},
+		{"csv", "", true},
+	}
+
+	for _, tt := range tests {
+		f, err := ParseFormat(tt.input)
+		if (err != nil) != tt.err {
+			t.Errorf("input %q: expected error %v, got %v", tt.input, tt.err, err)
+		}
+		if f != tt.expected {
+			t.Errorf("input %q: expected format %q, got %q", tt.input, tt.expected, f)
+		}
+	}
+}
+
+func TestRenderJSON(t *testing.T) {
+	res := sampleDiffResult()
+	var buf bytes.Buffer
+	err := Render(&buf, res, Options{Format: FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("JSON output is not valid JSON: %v\nOutput:\n%s", err, buf.String())
+	}
+
+	summary, ok := parsed["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing summary in JSON output")
+	}
+	if summary["modified"].(float64) != 1 || summary["added"].(float64) != 1 || summary["removed"].(float64) != 1 || summary["ignored"].(float64) != 2 || summary["total"].(float64) != 3 {
+		t.Errorf("unexpected summary values: %+v", summary)
+	}
+
+	changes, ok := parsed["changes"].([]any)
+	if !ok || len(changes) != 3 {
+		t.Fatalf("expected 3 changes in JSON output, got: %+v", parsed["changes"])
+	}
+
+	c0 := changes[0].(map[string]any)
+	if c0["path"] != "name" || c0["type"] != "modified" || c0["old"] != "Alice" || c0["new"] != "Bob" {
+		t.Errorf("unexpected change[0]: %+v", c0)
+	}
+
+	c1 := changes[1].(map[string]any)
+	if c1["path"] != "country" || c1["type"] != "added" || c1["new"] != "India" || c1["old"] != nil {
+		t.Errorf("unexpected change[1]: %+v", c1)
+	}
+
+	c2 := changes[2].(map[string]any)
+	if c2["path"] != "old_tag" || c2["type"] != "removed" || c2["old"] != "legacy" || c2["new"] != nil {
+		t.Errorf("unexpected change[2]: %+v", c2)
+	}
+}
+
+func TestRenderJSONSummaryOnly(t *testing.T) {
+	res := sampleDiffResult()
+	var buf bytes.Buffer
+	err := Render(&buf, res, Options{Format: FormatJSON, SummaryOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("JSON summary is not valid JSON: %v", err)
+	}
+
+	if _, ok := parsed["changes"]; ok {
+		t.Errorf("summary only should not contain changes field")
+	}
+	if _, ok := parsed["summary"]; !ok {
+		t.Errorf("missing summary object in output")
+	}
+}
+
+func TestRenderJSONEmptyDiff(t *testing.T) {
+	res := &diff.DiffResult{}
+	var buf bytes.Buffer
+	err := Render(&buf, res, Options{Format: FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("empty JSON diff is not valid JSON: %v", err)
+	}
+
+	changes := parsed["changes"].([]any)
+	if len(changes) != 0 {
+		t.Errorf("expected empty changes array, got: %v", changes)
+	}
+}
+
+func TestRenderUnified(t *testing.T) {
+	res := sampleDiffResult()
+	var buf bytes.Buffer
+	err := Render(&buf, res, Options{
+		Format:  FormatUnified,
+		OldPath: "old.json",
+		NewPath: "new.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "--- old.json\n+++ new.json") {
+		t.Errorf("missing unified header in output:\n%s", out)
+	}
+	if !strings.Contains(out, "@@ name\n- \"Alice\"\n+ \"Bob\"") {
+		t.Errorf("missing modified section in unified output:\n%s", out)
+	}
+	if !strings.Contains(out, "@@ country\n+ \"India\"") {
+		t.Errorf("missing added section in unified output:\n%s", out)
+	}
+	if !strings.Contains(out, "@@ old_tag\n- \"legacy\"") {
+		t.Errorf("missing removed section in unified output:\n%s", out)
 	}
 }
 

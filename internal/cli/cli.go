@@ -26,26 +26,39 @@ Usage:
   jdiff [options] <old.json> <new.json>
 
 Options:
-  --help            Show help
-  --version         Show version
-  --no-color        Disable colored output
-  --compact         Display compact diff output
-  --verbose         Display additional comparison information
-  --summary         Display only the change summary
-  --ignore <path>   Ignore a JSON path (can be specified multiple times)
-  --config <file>   Use a configuration file (defaults to .jdiff.json)
-  --show-config     Show active comparison configuration
+  --help                Show help
+  --version             Show version
+  --output <format>     Output format: human, json, unified (default: human)
+  --output-file <file>  Write output to a file instead of stdout
+  --no-color            Disable colored output
+  --compact             Display compact diff output
+  --verbose             Display additional comparison information
+  --summary             Display only the change summary
+  --ignore <path>       Ignore a JSON path (can be specified multiple times)
+  --config <file>       Use a configuration file (defaults to .jdiff.json)
+  --show-config         Show active comparison configuration
+
+Arguments:
+  <old.json>            Old JSON document (or - for stdin)
+  <new.json>            New JSON document (or - for stdin)
 `
 
 // CLI manages command-line interface execution and I/O streams.
 type CLI struct {
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 }
 
-// New creates a new CLI instance with given standard output and error writers.
+// New creates a new CLI instance with given standard output and error writers and defaults stdin to os.Stdin.
 func New(stdout, stderr io.Writer) *CLI {
+	return NewWithStdin(os.Stdin, stdout, stderr)
+}
+
+// NewWithStdin creates a CLI instance with custom stdin, stdout, and stderr.
+func NewWithStdin(stdin io.Reader, stdout, stderr io.Writer) *CLI {
 	return &CLI{
+		stdin:  stdin,
 		stdout: stdout,
 		stderr: stderr,
 	}
@@ -54,14 +67,16 @@ func New(stdout, stderr io.Writer) *CLI {
 // Run parses arguments and executes the diff operation.
 func (c *CLI) Run(args []string) int {
 	var (
-		noColor     bool
-		compact     bool
-		verbose     bool
-		summary     bool
-		showConfig  bool
-		configFile  string
-		cliIgnores  []string
-		positionals []string
+		outputFormatStr string
+		outputFile      string
+		noColor         bool
+		compact         bool
+		verbose         bool
+		summary         bool
+		showConfig      bool
+		configFile      string
+		cliIgnores      []string
+		positionals     []string
 	)
 
 	// Check if help or version was requested
@@ -80,6 +95,24 @@ func (c *CLI) Run(args []string) int {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--output":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --output")
+				return ExitCodeError
+			}
+			i++
+			outputFormatStr = args[i]
+		case strings.HasPrefix(arg, "--output="):
+			outputFormatStr = strings.TrimPrefix(arg, "--output=")
+		case arg == "--output-file":
+			if i+1 >= len(args) {
+				fmt.Fprintln(c.stderr, "jdiff: missing argument for --output-file")
+				return ExitCodeError
+			}
+			i++
+			outputFile = args[i]
+		case strings.HasPrefix(arg, "--output-file="):
+			outputFile = strings.TrimPrefix(arg, "--output-file=")
 		case arg == "--no-color":
 			noColor = true
 		case arg == "--compact":
@@ -97,6 +130,8 @@ func (c *CLI) Run(args []string) int {
 			}
 			i++
 			configFile = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			configFile = strings.TrimPrefix(arg, "--config=")
 		case arg == "--ignore":
 			if i+1 >= len(args) {
 				fmt.Fprintln(c.stderr, "jdiff: missing argument for --ignore")
@@ -106,14 +141,19 @@ func (c *CLI) Run(args []string) int {
 			cliIgnores = append(cliIgnores, args[i])
 		case strings.HasPrefix(arg, "--ignore="):
 			cliIgnores = append(cliIgnores, strings.TrimPrefix(arg, "--ignore="))
-		case strings.HasPrefix(arg, "--config="):
-			configFile = strings.TrimPrefix(arg, "--config=")
-		case strings.HasPrefix(arg, "-"):
+		case strings.HasPrefix(arg, "-") && arg != "-":
 			fmt.Fprintf(c.stderr, "jdiff: unknown flag %q\n", arg)
 			return ExitCodeError
 		default:
 			positionals = append(positionals, arg)
 		}
+	}
+
+	// Validate output format
+	format, err := render.ParseFormat(outputFormatStr)
+	if err != nil {
+		fmt.Fprintf(c.stderr, "jdiff: %v\n", err)
+		return ExitCodeError
 	}
 
 	// Load configuration rules
@@ -177,13 +217,18 @@ func (c *CLI) Run(args []string) int {
 	oldPath := positionals[0]
 	newPath := positionals[1]
 
-	oldData, err := os.ReadFile(oldPath)
+	if oldPath == "-" && newPath == "-" {
+		fmt.Fprintln(c.stderr, "jdiff: cannot read both inputs from stdin")
+		return ExitCodeError
+	}
+
+	oldData, err := c.readInput(oldPath)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: failed to read %s: %v\n", oldPath, err)
 		return ExitCodeError
 	}
 
-	newData, err := os.ReadFile(newPath)
+	newData, err := c.readInput(newPath)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: failed to read %s: %v\n", newPath, err)
 		return ExitCodeError
@@ -204,6 +249,7 @@ func (c *CLI) Run(args []string) int {
 	}
 
 	renderOpts := render.Options{
+		Format:       format,
 		Color:        colorEnabled,
 		Compact:      compact,
 		Verbose:      verbose,
@@ -213,10 +259,32 @@ func (c *CLI) Run(args []string) int {
 		IgnoredRules: activeRules,
 	}
 
-	if err := render.Render(c.stdout, diffResult, renderOpts); err != nil {
+	// Determine output destination writer
+	outWriter := c.stdout
+	if outputFile != "" {
+		f, err := os.Create(outputFile)
+		if err != nil {
+			fmt.Fprintf(c.stderr, "jdiff: failed to create output file %s: %v\n", outputFile, err)
+			return ExitCodeError
+		}
+		defer f.Close()
+		outWriter = f
+	}
+
+	if err := render.Render(outWriter, diffResult, renderOpts); err != nil {
 		fmt.Fprintf(c.stderr, "jdiff: render error: %v\n", err)
 		return ExitCodeError
 	}
 
 	return ExitCodeOK
+}
+
+func (c *CLI) readInput(path string) ([]byte, error) {
+	if path == "-" {
+		if c.stdin == nil {
+			return nil, fmt.Errorf("stdin not available")
+		}
+		return io.ReadAll(c.stdin)
+	}
+	return os.ReadFile(path)
 }

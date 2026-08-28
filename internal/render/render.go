@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -18,8 +19,35 @@ const (
 	colorBold   = "\033[1m"
 )
 
+// Format represents the output format type.
+type Format string
+
+const (
+	// FormatHuman is the default human-readable terminal output.
+	FormatHuman Format = "human"
+	// FormatJSON is machine-readable JSON output.
+	FormatJSON Format = "json"
+	// FormatUnified is a unified diff-style representation.
+	FormatUnified Format = "unified"
+)
+
+// ParseFormat converts a raw string to a recognized Format.
+func ParseFormat(s string) (Format, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "human":
+		return FormatHuman, nil
+	case "json":
+		return FormatJSON, nil
+	case "unified":
+		return FormatUnified, nil
+	default:
+		return "", fmt.Errorf("unsupported output format: %s", s)
+	}
+}
+
 // Options configures terminal rendering presentation behavior.
 type Options struct {
+	Format       Format
 	Color        bool
 	Compact      bool
 	Verbose      bool
@@ -31,6 +59,128 @@ type Options struct {
 
 // Render formats a DiffResult to the provided writer according to Options.
 func Render(w io.Writer, result *diff.DiffResult, opts Options) error {
+	switch opts.Format {
+	case FormatJSON:
+		return renderJSON(w, result, opts)
+	case FormatUnified:
+		return renderUnified(w, result, opts)
+	default:
+		return renderHuman(w, result, opts)
+	}
+}
+
+// renderJSON outputs machine-readable JSON diff results.
+func renderJSON(w io.Writer, result *diff.DiffResult, opts Options) error {
+	summary := result.Summary()
+	jsonSummary := map[string]any{
+		"added":    summary.Added,
+		"removed":  summary.Removed,
+		"modified": summary.Modified,
+		"ignored":  summary.Ignored,
+		"total":    summary.Total(),
+	}
+
+	if opts.SummaryOnly {
+		payload := map[string]any{
+			"summary": jsonSummary,
+		}
+		data, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+
+	changesList := make([]map[string]any, 0, len(result.Changes))
+	for _, c := range result.Changes {
+		m := map[string]any{
+			"path": c.Path.String(),
+			"type": strings.ToLower(string(c.Type)),
+		}
+		switch c.Type {
+		case diff.ChangeModified:
+			m["old"] = c.OldValue
+			m["new"] = c.NewValue
+		case diff.ChangeAdded:
+			m["new"] = c.NewValue
+		case diff.ChangeRemoved:
+			m["old"] = c.OldValue
+		}
+		changesList = append(changesList, m)
+	}
+
+	payload := map[string]any{
+		"summary": jsonSummary,
+		"changes": changesList,
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
+}
+
+// renderUnified outputs unified diff-style results.
+func renderUnified(w io.Writer, result *diff.DiffResult, opts Options) error {
+	if !result.HasChanges() {
+		_, err := fmt.Fprintln(w, "No differences found.")
+		return err
+	}
+
+	var sb strings.Builder
+	oldLabel := opts.OldPath
+	if oldLabel == "" {
+		oldLabel = "old"
+	}
+	newLabel := opts.NewPath
+	if newLabel == "" {
+		newLabel = "new"
+	}
+
+	sb.WriteString(fmt.Sprintf("--- %s\n", oldLabel))
+	sb.WriteString(fmt.Sprintf("+++ %s\n", newLabel))
+
+	for i, c := range result.Changes {
+		sb.WriteString(fmt.Sprintf("@@ %s\n", c.Path.String()))
+		switch c.Type {
+		case diff.ChangeModified:
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("%s- %s%s\n", colorRed, diff.FormatValue(c.OldValue), colorReset))
+				sb.WriteString(fmt.Sprintf("%s+ %s%s", colorGreen, diff.FormatValue(c.NewValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("- %s\n", diff.FormatValue(c.OldValue)))
+				sb.WriteString(fmt.Sprintf("+ %s", diff.FormatValue(c.NewValue)))
+			}
+		case diff.ChangeAdded:
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("%s+ %s%s", colorGreen, diff.FormatValue(c.NewValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("+ %s", diff.FormatValue(c.NewValue)))
+			}
+		case diff.ChangeRemoved:
+			if opts.Color {
+				sb.WriteString(fmt.Sprintf("%s- %s%s", colorRed, diff.FormatValue(c.OldValue), colorReset))
+			} else {
+				sb.WriteString(fmt.Sprintf("- %s", diff.FormatValue(c.OldValue)))
+			}
+		}
+
+		if i < len(result.Changes)-1 {
+			sb.WriteString("\n\n")
+		} else {
+			sb.WriteString("\n")
+		}
+	}
+
+	_, err := fmt.Fprint(w, sb.String())
+	return err
+}
+
+// renderHuman outputs the standard/compact human-readable terminal format.
+func renderHuman(w io.Writer, result *diff.DiffResult, opts Options) error {
 	// Case 1: Summary-Only presentation mode
 	if opts.SummaryOnly {
 		return renderSummaryOnly(w, result, opts)
