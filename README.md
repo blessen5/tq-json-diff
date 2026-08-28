@@ -1,35 +1,30 @@
 # jdiff
 
-A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking, intelligent array element comparison, and rich terminal presentation modes.
+A fast, lightweight command-line tool built in Go that compares two JSON documents and clearly shows added, removed, and modified values with precise structural path tracking, intelligent array element comparison, selective ignore rules, and rich terminal presentation modes.
 
-**Current Version:** `v0.5.0`
+**Current Version:** `v0.6.0`
 
 ## Features
 
-- **Granular Array Comparison**: Performs deterministic index-based comparison of arrays, detecting added elements, removed elements, and modified values at specific indexes (e.g. `languages[1]`, `users[0].name`).
-- **Deep Recursive Comparison**: Recursively traverses nested JSON structures and nested arrays to arbitrary depths without falsely reporting parent containers.
-- **Precise JSON Path Engine**: Tracks dot-separated keys and bracketed array indexes (`data.groups[0].values[1]`, `[0]` for root arrays).
-- **Arrays of Objects**: Diffing objects nested within array items down to the property level.
-- **Explicit Type Change Detection**: Identifies type shifts between strings, numbers, booleans, null, objects, and arrays.
-- **Root JSON Value Support**: Compares root primitives (`"hello"`, `10`, `true`, `null`), root arrays, and root objects safely.
+- **Selective JSON Comparison & Ignore Rules**: Ignore dynamic or generated fields (e.g. timestamps, session IDs, request tokens) via CLI `--ignore` flags or configuration files.
+- **Flexible Path Pattern Matching**:
+  - **Exact Path**: `timestamp`, `metadata.created_at`, `users[0].session_id`
+  - **Object Subtree Pruning**: Ignoring `metadata` excludes the entire `metadata` sub-hierarchy.
+  - **Wildcard Keys (`*`)**: `*.timestamp`, `users.*.email`
+  - **Array Wildcards (`[*]`)**: `users[*].id`, `data.groups[*].values[*]`
+- **Configuration File Support (`.jdiff.json`)**: Automatically loads `.jdiff.json` if present in the current working directory, or an explicit file via `--config <path>`.
+- **Config Inspection (`--show-config`)**: Inspect merged active ignore rules without running a diff.
+- **Granular Array Comparison**: Performs deterministic index-based comparison of arrays, detecting added, removed, and modified elements.
+- **Deep Recursive Comparison**: Recursively traverses nested objects and arrays without falsely reporting parent containers.
+- **Precise JSON Path Engine**: Dot-separated property keys and bracketed array indices (`data.groups[0].values[1]`).
 - **Semantic ANSI Color Highlighting**: Added values in green (`+`), removed values in red (`-`), modified values in yellow, and path identifiers in cyan.
 - **Multiple Presentation Modes**:
-  - **Standard**: Hierarchical diff with change summaries.
-  - **Compact (`--compact`)**: Streamlined single-line representations per modification (`MODIFIED items[1]: "B" → "C"`).
-  - **Summary-Only (`--summary`)**: Displays only high-level change counters and totals.
-  - **Verbose (`--verbose`)**: Includes file paths and comparison context.
+  - **Standard**: Hierarchical diff with change and ignored summaries.
+  - **Compact (`--compact`)**: Streamlined single-line representations per modification.
+  - **Summary-Only (`--summary`)**: Displays only change counters, ignored metrics, and totals.
+  - **Verbose (`--verbose`)**: Lists ignored patterns and file path context before the diff.
 - **CI/CD & Scripting Support (`--no-color`)**: Automatic color detection with explicit `--no-color` override and standard `NO_COLOR` environment variable support.
-- **Zero External Dependencies**: Implemented entirely using the Go standard library.
-
-## Supported JSON Structures (v0.5.0)
-
-- **Objects**: Flat, nested, and deeply nested objects.
-- **Arrays**: Index-based element comparison, arrays of primitives, arrays of objects, and nested arrays.
-- **Strings**: Quoted string comparisons.
-- **Numbers**: Floating-point and integer numbers with full precision preservation (`json.Number`).
-- **Booleans**: `true` and `false` literals.
-- **Null Values**: `null` literal support.
-- **Root Primitives**: Single primitive, array, or null root documents.
+- **Zero External Dependencies**: Built strictly using the Go standard library.
 
 ## Installation
 
@@ -56,63 +51,99 @@ jdiff [options] <old.json> <new.json>
 | Flag | Description |
 |---|---|
 | `--help`, `-h` | Display usage and available options |
-| `--version`, `-v` | Display application version (`jdiff v0.5.0`) |
+| `--version`, `-v` | Display application version (`jdiff v0.6.0`) |
+| `--ignore <path>` | Ignore a JSON path or pattern (repeatable) |
+| `--config <file>` | Use a configuration file (defaults to `.jdiff.json`) |
+| `--show-config` | Display active ignore configuration and exit |
 | `--no-color` | Disable ANSI terminal color escape sequences |
 | `--compact` | Display compact single-line diffs |
-| `--verbose` | Include comparison file context before diff output |
+| `--verbose` | Display active ignore rules and comparison file context |
 | `--summary` | Suppress individual change diffs and display only the summary counts |
 
 ---
 
-## Array Comparison Example
+## Ignore Rules & Configuration
 
-Comparing [`examples/arrays-old.json`](examples/arrays-old.json) and [`examples/arrays-new.json`](examples/arrays-new.json):
+### 1. Command-Line Ignore Rules
+
+You can supply one or more `--ignore` flags:
 
 ```bash
-jdiff examples/arrays-old.json examples/arrays-new.json
+jdiff --ignore timestamp --ignore "*.updated_at" --ignore "users[*].session_id" old.json new.json
+```
+
+### 2. Configuration File (`.jdiff.json`)
+
+Create a `.jdiff.json` file in your repository or working directory:
+
+```json
+{
+  "ignore": [
+    "timestamp",
+    "request_id",
+    "*.updated_at",
+    "users[*].session_id"
+  ]
+}
+```
+
+Running `jdiff old.json new.json` will automatically load `.jdiff.json` if present.
+
+To specify a custom configuration file:
+
+```bash
+jdiff --config ./custom-rules.json old.json new.json
+```
+
+### 3. Rule Precedence & Merging
+
+When both CLI `--ignore` flags and a configuration file are present:
+1. Rules are merged into a unified set.
+2. CLI rules take precedence in order of evaluation.
+3. Duplicate rules are automatically deduplicated.
+
+### 4. Viewing Active Rules
+
+```bash
+jdiff --config .jdiff.json --show-config
+```
+
+**Output**:
+```text
+Ignore rules:
+  timestamp
+  request_id
+  *.updated_at
+  users[*].session_id
+```
+
+---
+
+## Selective Comparison Example
+
+Comparing [`examples/ignore-old.json`](examples/ignore-old.json) and [`examples/ignore-new.json`](examples/ignore-new.json) with [`examples/.jdiff.json`](examples/.jdiff.json):
+
+```bash
+jdiff --config examples/.jdiff.json examples/ignore-old.json examples/ignore-new.json
 ```
 
 **Output**:
 ```text
 MODIFIED
-  languages[1]
-    - "Python"
-    + "Rust"
+  users[0].name
+    - "Alice"
+    + "Alice Cooper"
 
-  maintainers[0].role
-    - "Lead"
-    + "Creator"
-
-ADDED
-  languages[3]
-    + "TypeScript"
-
-  maintainers[2]
-    + {"name":"Bob","role":"Reviewer"}
-
-REMOVED
-  features[2]
-    - "ansi-colors"
+  version
+    - "v0.5.0"
+    + "v0.6.0"
 
 Summary:
-  Added:     2
-  Removed:   1
+  Added:     0
+  Removed:   0
   Modified:  2
+  Ignored:   5
 ```
-
----
-
-## Current Array Limitations
-
-> [!NOTE]
-> `jdiff v0.5.0` uses **deterministic index-based array comparison** (`old[i]` vs `new[i]`).
->
-> It does not currently perform:
-> - ID/key-based entity matching across different array indexes
-> - Longest-common-subsequence (LCS) alignment or fuzzy similarity matching
-> - Element move and reorder detection
->
-> If an element is inserted at the beginning of an array, subsequent items at shifted indexes are evaluated by their corresponding index position. Advanced key-based alignment and heuristic reorder detection are planned for upcoming releases.
 
 ---
 
@@ -120,8 +151,13 @@ Summary:
 
 | Code | Meaning |
 |---|---|
-| `0` | Command completed successfully (diff executed or help/version printed) |
-| `1` | Operational error (missing arguments, unreadable files, invalid JSON syntax) |
+| `0` | Command completed successfully (diff executed or help/version/config printed) |
+| `1` | Operational error (invalid arguments, unreadable files, invalid JSON syntax, invalid config) |
+
+## Current Limitations
+
+- **Array Comparison**: Uses index-based matching (`old[i]` vs `new[i]`). Advanced ID/key-based entity matching across differing positions and heuristic reorder detection are planned for future releases.
+- **Wildcard Syntax**: Supports exact paths, object segment wildcard (`*`), and array index wildcard (`[*]`). Arbitrary regex or full globs are not supported.
 
 ## Roadmap
 
@@ -130,8 +166,8 @@ Summary:
 - [x] **v0.3.0**: Deep recursive comparison, JSON Path engine, root primitive support, explicit type change detection, change summaries.
 - [x] **v0.4.0**: Professional terminal presentation (ANSI colors, `--no-color`, `--compact`, `--verbose`, `--summary`).
 - [x] **v0.5.0**: Granular index-based array comparison, array paths (`users[0].name`), nested arrays, and arrays of objects.
-- [ ] **v0.6.0**: Standardized JSON Patch (RFC 6902) export.
-- [ ] **v0.7.0**: Identity/key-based array alignment and reorder detection.
+- [x] **v0.6.0**: Ignore rules, wildcard paths (`*.key`, `users[*].id`), configuration files (`.jdiff.json`), and `--show-config`.
+- [ ] **v0.7.0**: Standardized JSON Patch (RFC 6902) export.
 
 ## Development & Testing
 
