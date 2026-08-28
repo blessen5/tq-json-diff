@@ -66,8 +66,8 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.4.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.4.0', got: %q", out)
+			if out != "jdiff v0.5.0" {
+				t.Errorf("expected stdout to be 'jdiff v0.5.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
@@ -120,8 +120,8 @@ func TestCLICompactFlag(t *testing.T) {
 	oldFile := filepath.Join(tmpDir, "old.json")
 	newFile := filepath.Join(tmpDir, "new.json")
 
-	_ = os.WriteFile(oldFile, []byte(`{"age": 19}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"age": 20}`), 0644)
+	_ = os.WriteFile(oldFile, []byte(`{"items": ["A", "B"]}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"items": ["A", "C"]}`), 0644)
 
 	var stdout, stderr bytes.Buffer
 	c := New(&stdout, &stderr)
@@ -132,7 +132,7 @@ func TestCLICompactFlag(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "MODIFIED age: 19 → 20") {
+	if !strings.Contains(out, "MODIFIED items[1]: \"B\" → \"C\"") {
 		t.Errorf("expected compact format line in stdout, got: %s", out)
 	}
 }
@@ -164,8 +164,8 @@ func TestCLISummaryFlag(t *testing.T) {
 	oldFile := filepath.Join(tmpDir, "old.json")
 	newFile := filepath.Join(tmpDir, "new.json")
 
-	_ = os.WriteFile(oldFile, []byte(`{"a": 1, "b": 2}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"a": 10, "c": 3}`), 0644)
+	_ = os.WriteFile(oldFile, []byte(`{"a": [1, 2]}`), 0644)
+	_ = os.WriteFile(newFile, []byte(`{"a": [1, 20, 30]}`), 0644)
 
 	var stdout, stderr bytes.Buffer
 	c := New(&stdout, &stderr)
@@ -179,7 +179,7 @@ func TestCLISummaryFlag(t *testing.T) {
 	if strings.Contains(out, "MODIFIED\n  a") {
 		t.Errorf("summary mode should not show individual diffs, got: %s", out)
 	}
-	if !strings.Contains(out, "JSON Diff Summary\n\nAdded:     1\nRemoved:   1\nModified:  1\nTotal:     3") {
+	if !strings.Contains(out, "JSON Diff Summary\n\nAdded:     1\nRemoved:   0\nModified:  1\nTotal:     2") {
 		t.Errorf("expected summary block, got: %s", out)
 	}
 }

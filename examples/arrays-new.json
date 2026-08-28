@@ -1,0 +1,27 @@
+{
+  "project": "jdiff",
+  "maintainers": [
+    {
+      "name": "Blessen",
+      "role": "Creator"
+    },
+    {
+      "name": "Alice",
+      "role": "Contributor"
+    },
+    {
+      "name": "Bob",
+      "role": "Reviewer"
+    }
+  ],
+  "languages": [
+    "Go",
+    "Rust",
+    "C",
+    "TypeScript"
+  ],
+  "features": [
+    "structural-diff",
+    "deep-paths"
+  ]
+}

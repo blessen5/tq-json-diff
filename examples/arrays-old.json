@@ -1,0 +1,23 @@
+{
+  "project": "jdiff",
+  "maintainers": [
+    {
+      "name": "Blessen",
+      "role": "Lead"
+    },
+    {
+      "name": "Alice",
+      "role": "Contributor"
+    }
+  ],
+  "languages": [
+    "Go",
+    "Python",
+    "C"
+  ],
+  "features": [
+    "structural-diff",
+    "deep-paths",
+    "ansi-colors"
+  ]
+}

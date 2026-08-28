@@ -263,7 +263,7 @@ func compare(path Path, oldVal, newVal any) []Change {
 		sort.Strings(keys)
 
 		for _, k := range keys {
-			childPath := path.Append(k)
+			childPath := path.AppendKey(k)
 			oldChild, inOld := oldMap[k]
 			newChild, inNew := newMap[k]
 
@@ -293,7 +293,52 @@ func compare(path Path, oldVal, newVal any) []Change {
 		return changes
 	}
 
-	// Case 2: Type mismatch (e.g. object vs string, number vs string, null vs value)
+	// Case 2: Both are slices/arrays (v0.5.0: granular index-based element comparison)
+	if oldType == JSONTypeArray && newType == JSONTypeArray {
+		oldSlice := oldVal.([]any)
+		newSlice := newVal.([]any)
+
+		minLen := len(oldSlice)
+		if len(newSlice) < minLen {
+			minLen = len(newSlice)
+		}
+
+		// 1. Compare common index range
+		for i := 0; i < minLen; i++ {
+			indexPath := path.AppendIndex(i)
+			changes = append(changes, compare(indexPath, oldSlice[i], newSlice[i])...)
+		}
+
+		// 2. Extra elements in old -> REMOVED
+		for i := minLen; i < len(oldSlice); i++ {
+			indexPath := path.AppendIndex(i)
+			changes = append(changes, Change{
+				Path:     indexPath,
+				Type:     ChangeRemoved,
+				OldValue: oldSlice[i],
+				NewValue: nil,
+				OldType:  DetectType(oldSlice[i]),
+				NewType:  JSONTypeNull,
+			})
+		}
+
+		// 3. Extra elements in new -> ADDED
+		for i := minLen; i < len(newSlice); i++ {
+			indexPath := path.AppendIndex(i)
+			changes = append(changes, Change{
+				Path:     indexPath,
+				Type:     ChangeAdded,
+				OldValue: nil,
+				NewValue: newSlice[i],
+				OldType:  JSONTypeNull,
+				NewType:  DetectType(newSlice[i]),
+			})
+		}
+
+		return changes
+	}
+
+	// Case 3: Type mismatch (e.g. object vs string, array vs object, null vs number)
 	if oldType != newType {
 		changes = append(changes, Change{
 			Path:     path,
@@ -303,21 +348,6 @@ func compare(path Path, oldVal, newVal any) []Change {
 			OldType:  oldType,
 			NewType:  newType,
 		})
-		return changes
-	}
-
-	// Case 3: Both are slices/arrays (v0.3.0: safe whole-value equality)
-	if oldType == JSONTypeArray {
-		if !reflect.DeepEqual(oldVal, newVal) {
-			changes = append(changes, Change{
-				Path:     path,
-				Type:     ChangeModified,
-				OldValue: oldVal,
-				NewValue: newVal,
-				OldType:  oldType,
-				NewType:  newType,
-			})
-		}
 		return changes
 	}
 
@@ -336,11 +366,11 @@ func compare(path Path, oldVal, newVal any) []Change {
 	return changes
 }
 
-// sortChanges sorts a slice of changes deterministically by path string and change type.
+// sortChanges sorts a slice of changes deterministically by path and change type.
 func sortChanges(changes []Change) {
 	sort.SliceStable(changes, func(i, j int) bool {
 		if changes[i].Path.String() != changes[j].Path.String() {
-			return changes[i].Path.String() < changes[j].Path.String()
+			return changes[i].Path.Less(changes[j].Path)
 		}
 		return changes[i].Type < changes[j].Type
 	})

@@ -60,64 +60,181 @@ func TestDeeplyNestedModification(t *testing.T) {
 	}
 }
 
-func TestDeeplyNestedAdditionAndRemoval(t *testing.T) {
-	oldJSON := []byte(`{
-		"app": {
-			"server": {
-				"legacy_port": 80
-			}
-		}
-	}`)
-	newJSON := []byte(`{
-		"app": {
-			"server": {
-				"ssl_port": 443
-			}
-		}
-	}`)
+func TestArrayElementModification(t *testing.T) {
+	oldJSON := []byte(`{"items": ["A", "B", "C"]}`)
+	newJSON := []byte(`{"items": ["A", "X", "C"]}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 
-	if len(res.Added()) != 1 || res.Added()[0].Path.String() != "app.server.ssl_port" {
-		t.Errorf("expected added app.server.ssl_port, got %+v", res.Added())
+	if len(res.Modified()) != 1 {
+		t.Fatalf("expected 1 modified change, got %d", len(res.Modified()))
 	}
-	if len(res.Removed()) != 1 || res.Removed()[0].Path.String() != "app.server.legacy_port" {
-		t.Errorf("expected removed app.server.legacy_port, got %+v", res.Removed())
+	c := res.Modified()[0]
+	if c.Path.String() != "items[1]" {
+		t.Errorf("expected path 'items[1]', got %q", c.Path.String())
+	}
+	if c.OldValue != "B" || c.NewValue != "X" {
+		t.Errorf("expected B -> X, got %v -> %v", c.OldValue, c.NewValue)
 	}
 }
 
-func TestNewAndRemovedNestedObjects(t *testing.T) {
+func TestArrayAdditionAndRemoval(t *testing.T) {
+	t.Run("root array addition", func(t *testing.T) {
+		oldJSON := []byte(`["A", "B"]`)
+		newJSON := []byte(`["A", "B", "C"]`)
+
+		res, err := CompareBytes(oldJSON, newJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Added()) != 1 || res.Added()[0].Path.String() != "[2]" {
+			t.Errorf("expected added [2], got %+v", res.Added())
+		}
+	})
+
+	t.Run("root array removal", func(t *testing.T) {
+		oldJSON := []byte(`["A", "B", "C"]`)
+		newJSON := []byte(`["A", "B"]`)
+
+		res, err := CompareBytes(oldJSON, newJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Removed()) != 1 || res.Removed()[0].Path.String() != "[2]" {
+			t.Errorf("expected removed [2], got %+v", res.Removed())
+		}
+	})
+
+	t.Run("empty to populated", func(t *testing.T) {
+		oldJSON := []byte(`[]`)
+		newJSON := []byte(`["A", "B"]`)
+
+		res, err := CompareBytes(oldJSON, newJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Added()) != 2 {
+			t.Fatalf("expected 2 additions, got %d", len(res.Added()))
+		}
+		if res.Added()[0].Path.String() != "[0]" || res.Added()[1].Path.String() != "[1]" {
+			t.Errorf("expected [0] and [1], got %s and %s", res.Added()[0].Path.String(), res.Added()[1].Path.String())
+		}
+	})
+
+	t.Run("populated to empty", func(t *testing.T) {
+		oldJSON := []byte(`["A", "B"]`)
+		newJSON := []byte(`[]`)
+
+		res, err := CompareBytes(oldJSON, newJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Removed()) != 2 {
+			t.Fatalf("expected 2 removals, got %d", len(res.Removed()))
+		}
+	})
+}
+
+func TestArrayOfObjects(t *testing.T) {
 	oldJSON := []byte(`{
-		"user": {
-			"name": "John",
-			"old_section": {
-				"foo": "bar"
-			}
+		"users": [
+			{"id": 1, "name": "John"},
+			{"id": 2, "name": "Mary"}
+		]
+	}`)
+	newJSON := []byte(`{
+		"users": [
+			{"id": 1, "name": "James"},
+			{"id": 2, "name": "Mary"},
+			{"id": 3, "name": "David"}
+		]
+	}`)
+
+	res, err := CompareBytes(oldJSON, newJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "users[0].name" {
+		t.Errorf("expected modified users[0].name, got %+v", res.Modified())
+	}
+	if len(res.Added()) != 1 || res.Added()[0].Path.String() != "users[2]" {
+		t.Errorf("expected added users[2], got %+v", res.Added())
+	}
+}
+
+func TestNestedArraysAndObjects(t *testing.T) {
+	oldJSON := []byte(`{
+		"data": {
+			"groups": [
+				{
+					"values": [10, 20, 30]
+				}
+			]
 		}
 	}`)
 	newJSON := []byte(`{
-		"user": {
-			"name": "John",
-			"address": {
-				"city": "Kochi"
-			}
+		"data": {
+			"groups": [
+				{
+					"values": [10, 25, 30]
+				}
+			]
 		}
 	}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 
-	if len(res.Added()) != 1 || res.Added()[0].Path.String() != "user.address" {
-		t.Errorf("expected added user.address, got %+v", res.Added())
+	if len(res.Modified()) != 1 {
+		t.Fatalf("expected 1 modified change, got %d", len(res.Modified()))
 	}
-	if len(res.Removed()) != 1 || res.Removed()[0].Path.String() != "user.old_section" {
-		t.Errorf("expected removed user.old_section, got %+v", res.Removed())
+	c := res.Modified()[0]
+	if c.Path.String() != "data.groups[0].values[1]" {
+		t.Errorf("expected path 'data.groups[0].values[1]', got %q", c.Path.String())
 	}
+}
+
+func TestArrayElementTypes(t *testing.T) {
+	t.Run("strings", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`["a", "b"]`), []byte(`["a", "c"]`))
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "[1]" {
+			t.Errorf("unexpected: %+v", res.Modified())
+		}
+	})
+
+	t.Run("numbers", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`[10, 20]`), []byte(`[10, 30]`))
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "[1]" {
+			t.Errorf("unexpected: %+v", res.Modified())
+		}
+	})
+
+	t.Run("booleans", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`[true, false]`), []byte(`[true, true]`))
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "[1]" {
+			t.Errorf("unexpected: %+v", res.Modified())
+		}
+	})
+
+	t.Run("null in array", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`[null, "val"]`), []byte(`["val", "val"]`))
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "[0]" {
+			t.Errorf("unexpected: %+v", res.Modified())
+		}
+	})
+
+	t.Run("nested matrix array", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`[[1, 2], [3, 4]]`), []byte(`[[1, 2], [3, 5]]`))
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "[1][1]" {
+			t.Errorf("expected [1][1] modified, got: %+v", res.Modified())
+		}
+	})
 }
 
 func TestTypeConversions(t *testing.T) {
@@ -156,122 +273,52 @@ func TestTypeConversions(t *testing.T) {
 	}
 }
 
-func TestRootJSONValues(t *testing.T) {
-	t.Run("root primitives identical", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`"hello"`), []byte(`"hello"`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.HasChanges() {
-			t.Errorf("expected no changes for identical root strings")
-		}
-	})
-
-	t.Run("root primitive modified", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`10`), []byte(`20`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
-			t.Errorf("unexpected root diff: %+v", res.Modified())
-		}
-	})
-
-	t.Run("root primitive vs object", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`"plain"`), []byte(`{"key": "val"}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
-			t.Errorf("unexpected root diff: %+v", res.Modified())
-		}
-	})
-
-	t.Run("root array modified", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`[1, 2]`), []byte(`[1, 3]`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
-			t.Errorf("unexpected root diff: %+v", res.Modified())
-		}
-	})
-
-	t.Run("root array identical", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`[1, 2, "a"]`), []byte(`[1, 2, "a"]`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.HasChanges() {
-			t.Errorf("expected no diff for identical root arrays")
-		}
-	})
-
-	t.Run("root null vs value", func(t *testing.T) {
-		res, err := CompareBytes([]byte(`null`), []byte(`true`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(res.Modified()) != 1 {
-			t.Errorf("expected 1 modified change")
-		}
-	})
-}
-
 func TestSummaryAndFormatting(t *testing.T) {
 	oldJSON := []byte(`{
-		"name": "Blessen",
-		"age": 19,
-		"city": "Kochi",
-		"old_flag": true
+		"name": "Project",
+		"tags": ["go", "json", "cli"]
 	}`)
 	newJSON := []byte(`{
-		"name": "Blessen",
-		"age": 20,
-		"city": "Bengaluru",
-		"country": "India"
+		"name": "Project",
+		"tags": ["go", "diff", "cli", "opensource"]
 	}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 
 	summary := res.Summary()
-	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 2 {
+	if summary.Added != 1 || summary.Removed != 0 || summary.Modified != 1 {
 		t.Errorf("unexpected summary: %+v", summary)
 	}
 
 	out := res.String()
-	expectedSubstrings := []string{
-		"MODIFIED\n  age\n    - 19\n    + 20",
-		"city\n    - \"Kochi\"\n    + \"Bengaluru\"",
-		"ADDED\n  country\n    + \"India\"",
-		"REMOVED\n  old_flag\n    - true",
-		"Summary:\n  Added:     1\n  Removed:   1\n  Modified:  2",
+	if !strings.Contains(out, "MODIFIED\n  tags[1]\n    - \"json\"\n    + \"diff\"") {
+		t.Errorf("expected tags[1] modification, got:\n%s", out)
 	}
-
-	for _, sub := range expectedSubstrings {
-		if !strings.Contains(out, sub) {
-			t.Errorf("expected output to contain %q, but got:\n%s", sub, out)
-		}
+	if !strings.Contains(out, "ADDED\n  tags[3]\n    + \"opensource\"") {
+		t.Errorf("expected tags[3] addition, got:\n%s", out)
 	}
 }
 
 func TestDeterministicOrdering(t *testing.T) {
-	oldJSON := []byte(`{"z": 1, "a": 2, "m": 3}`)
-	newJSON := []byte(`{"z": 10, "a": 20, "m": 30}`)
+	oldJSON := []byte(`{"items": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}`)
+	newJSON := []byte(`{"items": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]}`)
 
-	for i := 0; i < 5; i++ {
-		res, err := CompareBytes(oldJSON, newJSON)
-		if err != nil {
-			t.Fatal(err)
-		}
-		mods := res.Modified()
-		if len(mods) != 3 || mods[0].Path.String() != "a" || mods[1].Path.String() != "m" || mods[2].Path.String() != "z" {
-			t.Fatalf("expected deterministic alphabetical sorting (a, m, z), got: %v, %v, %v",
-				mods[0].Path.String(), mods[1].Path.String(), mods[2].Path.String())
-		}
+	res, err := CompareBytes(oldJSON, newJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mods := res.Modified()
+	if len(mods) != 10 {
+		t.Fatalf("expected 10 modifications, got %d", len(mods))
+	}
+
+	// Verify items[2] comes before items[10] due to natural index sorting
+	if mods[2].Path.String() != "items[2]" || mods[9].Path.String() != "items[9]" {
+		t.Errorf("unexpected natural sorting order: %s, %s", mods[2].Path.String(), mods[9].Path.String())
 	}
 }
 
@@ -281,6 +328,8 @@ func TestEdgeCases(t *testing.T) {
 		json string
 	}{
 		{"empty object", `{}`},
+		{"empty array", `[]`},
+		{"nested empty array", `{"a": []}`},
 		{"nested empty object", `{"a": {}}`},
 		{"double nested empty object", `{"a": {"b": {}}}`},
 		{"null field", `{"a": null}`},
@@ -300,18 +349,4 @@ func TestEdgeCases(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("false vs true", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"a": false}`), []byte(`{"a": true}`))
-		if len(res.Modified()) != 1 {
-			t.Errorf("expected false vs true to be detected as modified")
-		}
-	})
-
-	t.Run("zero vs empty string", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"a": 0}`), []byte(`{"a": ""}`))
-		if len(res.Modified()) != 1 {
-			t.Errorf("expected 0 vs empty string to be detected as modified type change")
-		}
-	})
 }

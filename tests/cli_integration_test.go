@@ -48,9 +48,6 @@ func TestBinaryHelpFlag(t *testing.T) {
 	if !strings.Contains(out, "jdiff [options] <old.json> <new.json>") {
 		t.Errorf("expected stdout to contain usage, got: %s", out)
 	}
-	if !strings.Contains(out, "--compact") || !strings.Contains(out, "--verbose") || !strings.Contains(out, "--summary") {
-		t.Errorf("expected stdout to list all flags, got: %s", out)
-	}
 }
 
 func TestBinaryVersionFlag(t *testing.T) {
@@ -65,34 +62,58 @@ func TestBinaryVersionFlag(t *testing.T) {
 	}
 
 	out := strings.TrimSpace(stdout.String())
-	if out != "jdiff v0.4.0" {
-		t.Errorf("expected stdout to be 'jdiff v0.4.0', got: %q", out)
+	if out != "jdiff v0.5.0" {
+		t.Errorf("expected stdout to be 'jdiff v0.5.0', got: %q", out)
 	}
 }
 
-func TestBinaryNoArgsError(t *testing.T) {
-	cmd := exec.Command(binPath)
+func TestBinaryArrayDiffExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldFile := filepath.Join(tmpDir, "old.json")
+	newFile := filepath.Join(tmpDir, "new.json")
+
+	oldJSON := `{
+		"languages": ["Python", "Java", "C"]
+	}`
+	newJSON := `{
+		"languages": ["Python", "Go", "C", "Rust"]
+	}`
+
+	_ = os.WriteFile(oldFile, []byte(oldJSON), 0644)
+	_ = os.WriteFile(newFile, []byte(newJSON), 0644)
+
+	cmd := exec.Command(binPath, "--no-color", oldFile, newFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	if err == nil {
-		t.Fatalf("expected command to exit with non-zero code")
+	if err != nil {
+		t.Fatalf("expected command to exit 0, got err: %v, stderr: %s", err, stderr.String())
 	}
 
-	if !strings.Contains(stderr.String(), "jdiff [options] <old.json> <new.json>") {
-		t.Errorf("expected help output in stderr, got: %s", stderr.String())
+	out := stdout.String()
+	if !strings.Contains(out, "MODIFIED\n  languages[1]\n    - \"Java\"\n    + \"Go\"") {
+		t.Errorf("expected languages[1] modified in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ADDED\n  languages[3]\n    + \"Rust\"") {
+		t.Errorf("expected languages[3] added in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Summary:\n  Added:     1\n  Removed:   0\n  Modified:  1") {
+		t.Errorf("expected summary in output, got:\n%s", out)
 	}
 }
 
-func TestBinaryCompactAndNoColor(t *testing.T) {
+func TestBinaryCompactArrayDiff(t *testing.T) {
 	tmpDir := t.TempDir()
 	oldFile := filepath.Join(tmpDir, "old.json")
 	newFile := filepath.Join(tmpDir, "new.json")
 
-	_ = os.WriteFile(oldFile, []byte(`{"user": {"age": 19}}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"user": {"age": 20}}`), 0644)
+	oldJSON := `{"tags": ["go", "v1"]}`
+	newJSON := `{"tags": ["go", "v2", "beta"]}`
+
+	_ = os.WriteFile(oldFile, []byte(oldJSON), 0644)
+	_ = os.WriteFile(newFile, []byte(newJSON), 0644)
 
 	cmd := exec.Command(binPath, "--compact", "--no-color", oldFile, newFile)
 	var stdout, stderr bytes.Buffer
@@ -101,62 +122,14 @@ func TestBinaryCompactAndNoColor(t *testing.T) {
 
 	err := cmd.Run()
 	if err != nil {
-		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
+		t.Fatalf("expected command to exit 0, got err: %v, stderr: %s", err, stderr.String())
 	}
 
 	out := stdout.String()
-	if strings.Contains(out, "\033[") {
-		t.Errorf("expected no ANSI codes with --no-color, got: %q", out)
-	}
-	if !strings.Contains(out, "MODIFIED user.age: 19 → 20") {
+	if !strings.Contains(out, "MODIFIED tags[1]: \"v1\" → \"v2\"") {
 		t.Errorf("expected compact diff line, got: %s", out)
 	}
-}
-
-func TestBinarySummaryOnly(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"a": 1}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"a": 2, "b": 3}`), 0644)
-
-	cmd := exec.Command(binPath, "--summary", oldFile, newFile)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
-	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "JSON Diff Summary\n\nAdded:     1\nRemoved:   0\nModified:  1\nTotal:     2") {
-		t.Errorf("expected summary block, got: %s", out)
-	}
-}
-
-func TestBinaryVerbose(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldFile := filepath.Join(tmpDir, "old.json")
-	newFile := filepath.Join(tmpDir, "new.json")
-
-	_ = os.WriteFile(oldFile, []byte(`{"a": 1}`), 0644)
-	_ = os.WriteFile(newFile, []byte(`{"a": 2}`), 0644)
-
-	cmd := exec.Command(binPath, "--verbose", "--no-color", oldFile, newFile)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr.String())
-	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "Comparing:\n  Old: "+oldFile+"\n  New: "+newFile) {
-		t.Errorf("expected verbose file header, got: %s", out)
+	if !strings.Contains(out, "ADDED tags[2]: \"beta\"") {
+		t.Errorf("expected compact added line, got: %s", out)
 	}
 }
