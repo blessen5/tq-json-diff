@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+// mockMatcher is a simple matcher for testing diff ignore options directly
+type mockMatcher struct {
+	ignored map[string]bool
+}
+
+func (m *mockMatcher) Matches(path Path) bool {
+	return m.ignored[path.String()]
+}
+
 func TestIdenticalObjects(t *testing.T) {
 	oldJSON := []byte(`{"name": "Alice", "age": 30, "active": true}`)
 	newJSON := []byte(`{"name": "Alice", "age": 30, "active": true}`)
@@ -20,6 +29,75 @@ func TestIdenticalObjects(t *testing.T) {
 	out := res.String()
 	if strings.TrimSpace(out) != "No differences found." {
 		t.Fatalf("expected 'No differences found.', got %q", out)
+	}
+}
+
+func TestIgnoreRulesInDiff(t *testing.T) {
+	oldJSON := []byte(`{
+		"name": "Project",
+		"timestamp": "2026-01-01",
+		"request_id": "req-123",
+		"metadata": {
+			"created": "2025",
+			"updated": "2026"
+		},
+		"version": 1
+	}`)
+	newJSON := []byte(`{
+		"name": "Project",
+		"timestamp": "2026-08-01",
+		"request_id": "req-456",
+		"metadata": {
+			"created": "2024",
+			"updated": "2027"
+		},
+		"version": 2
+	}`)
+
+	matcher := &mockMatcher{
+		ignored: map[string]bool{
+			"timestamp":  true,
+			"request_id": true,
+			"metadata":   true,
+		},
+	}
+
+	res, err := CompareBytesWithOptions(oldJSON, newJSON, Options{Matcher: matcher})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(res.Modified()) != 1 {
+		t.Fatalf("expected 1 modified change (version), got %d", len(res.Modified()))
+	}
+	if res.Modified()[0].Path.String() != "version" {
+		t.Errorf("expected version to be modified, got: %s", res.Modified()[0].Path.String())
+	}
+
+	// Ignored: timestamp (1) + request_id (1) + metadata (2) = 4
+	if res.Ignored != 4 {
+		t.Errorf("expected 4 ignored changes, got %d", res.Ignored)
+	}
+}
+
+func TestIgnoreAllChanges(t *testing.T) {
+	oldJSON := []byte(`{"timestamp": "2026-01-01"}`)
+	newJSON := []byte(`{"timestamp": "2026-08-01"}`)
+
+	matcher := &mockMatcher{ignored: map[string]bool{"timestamp": true}}
+	res, err := CompareBytesWithOptions(oldJSON, newJSON, Options{Matcher: matcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.HasChanges() {
+		t.Errorf("expected no changes, got %d", len(res.Changes))
+	}
+	if res.Ignored != 1 {
+		t.Errorf("expected 1 ignored change, got %d", res.Ignored)
+	}
+	if strings.TrimSpace(res.String()) != "No differences found." {
+		t.Errorf("expected 'No differences found.', got %q", res.String())
 	}
 }
 
@@ -316,7 +394,6 @@ func TestDeterministicOrdering(t *testing.T) {
 		t.Fatalf("expected 10 modifications, got %d", len(mods))
 	}
 
-	// Verify items[2] comes before items[10] due to natural index sorting
 	if mods[2].Path.String() != "items[2]" || mods[9].Path.String() != "items[9]" {
 		t.Errorf("unexpected natural sorting order: %s, %s", mods[2].Path.String(), mods[9].Path.String())
 	}
