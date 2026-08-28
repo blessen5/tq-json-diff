@@ -65,8 +65,8 @@ func TestCLIVersion(t *testing.T) {
 			}
 
 			out := strings.TrimSpace(stdout.String())
-			if out != "jdiff v0.2.0" {
-				t.Errorf("expected stdout to be 'jdiff v0.2.0', got: %q", out)
+			if out != "jdiff v0.3.0" {
+				t.Errorf("expected stdout to be 'jdiff v0.3.0', got: %q", out)
 			}
 			if stderr.Len() > 0 {
 				t.Errorf("expected stderr to be empty, got: %s", stderr.String())
@@ -158,17 +158,46 @@ func TestCLIExecutionWithRealFiles(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "MODIFIED:\n    age\n        - 19\n        + 20") {
+	if !strings.Contains(out, "MODIFIED\n  age\n    - 19\n    + 20") {
 		t.Errorf("expected modified age in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "city\n        - \"Kochi\"\n        + \"Bengaluru\"") {
+	if !strings.Contains(out, "city\n    - \"Kochi\"\n    + \"Bengaluru\"") {
 		t.Errorf("expected modified city in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "ADDED:\n    country\n        + \"India\"") {
+	if !strings.Contains(out, "ADDED\n  country\n    + \"India\"") {
 		t.Errorf("expected added country in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Summary:\n  Added:     1\n  Removed:   0\n  Modified:  2") {
+		t.Errorf("expected summary block in output, got:\n%s", out)
 	}
 	if strings.Contains(out, "name") {
 		t.Errorf("unchanged field name should not appear in output, got:\n%s", out)
+	}
+}
+
+func TestCLIIdenticalFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	f1 := filepath.Join(tmpDir, "f1.json")
+	f2 := filepath.Join(tmpDir, "f2.json")
+
+	content := `{"service": "auth", "version": 1}`
+	if err := os.WriteFile(f1, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f2, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	c := New(&stdout, &stderr)
+
+	code := c.Run([]string{f1, f2})
+	if code != ExitCodeOK {
+		t.Fatalf("expected exit code %d for identical files, got %d", ExitCodeOK, code)
+	}
+
+	if strings.TrimSpace(stdout.String()) != "No differences found." {
+		t.Errorf("expected 'No differences found.', got: %q", stdout.String())
 	}
 }
 

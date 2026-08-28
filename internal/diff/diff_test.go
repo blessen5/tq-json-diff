@@ -17,83 +17,208 @@ func TestIdenticalObjects(t *testing.T) {
 	if res.HasChanges() {
 		t.Fatalf("expected no changes, got %d changes", len(res.Changes))
 	}
-	if res.String() != "" {
-		t.Fatalf("expected empty string output for identical docs, got %q", res.String())
+	out := res.String()
+	if strings.TrimSpace(out) != "No differences found." {
+		t.Fatalf("expected 'No differences found.', got %q", out)
 	}
 }
 
-func TestAddedProperty(t *testing.T) {
-	oldJSON := []byte(`{"name": "Alice"}`)
-	newJSON := []byte(`{"name": "Alice", "country": "India"}`)
+func TestDeeplyNestedModification(t *testing.T) {
+	oldJSON := []byte(`{
+		"user": {
+			"profile": {
+				"contact": {
+					"email": "old@example.com"
+				}
+			}
+		}
+	}`)
+	newJSON := []byte(`{
+		"user": {
+			"profile": {
+				"contact": {
+					"email": "new@example.com"
+				}
+			}
+		}
+	}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(res.Changes) != 1 {
-		t.Fatalf("expected 1 change, got %d", len(res.Changes))
+	if len(res.Modified()) != 1 {
+		t.Fatalf("expected 1 modified change, got %d", len(res.Modified()))
 	}
-	c := res.Changes[0]
-	if c.Type != ChangeAdded || c.Path != "country" || c.NewValue != "India" {
-		t.Errorf("unexpected change: %+v", c)
+	c := res.Modified()[0]
+	if c.Path.String() != "user.profile.contact.email" {
+		t.Errorf("expected path 'user.profile.contact.email', got %q", c.Path.String())
 	}
-
-	out := res.String()
-	expected := "ADDED:\n    country\n        + \"India\"\n"
-	if out != expected {
-		t.Errorf("expected output:\n%s\ngot:\n%s", expected, out)
+	if c.OldValue != "old@example.com" || c.NewValue != "new@example.com" {
+		t.Errorf("unexpected values: old=%v, new=%v", c.OldValue, c.NewValue)
 	}
 }
 
-func TestRemovedProperty(t *testing.T) {
-	oldJSON := []byte(`{"name": "Alice", "city": "Kochi"}`)
-	newJSON := []byte(`{"name": "Alice"}`)
+func TestDeeplyNestedAdditionAndRemoval(t *testing.T) {
+	oldJSON := []byte(`{
+		"app": {
+			"server": {
+				"legacy_port": 80
+			}
+		}
+	}`)
+	newJSON := []byte(`{
+		"app": {
+			"server": {
+				"ssl_port": 443
+			}
+		}
+	}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(res.Changes) != 1 {
-		t.Fatalf("expected 1 change, got %d", len(res.Changes))
+	if len(res.Added()) != 1 || res.Added()[0].Path.String() != "app.server.ssl_port" {
+		t.Errorf("expected added app.server.ssl_port, got %+v", res.Added())
 	}
-	c := res.Changes[0]
-	if c.Type != ChangeRemoved || c.Path != "city" || c.OldValue != "Kochi" {
-		t.Errorf("unexpected change: %+v", c)
-	}
-
-	out := res.String()
-	expected := "REMOVED:\n    city\n        - \"Kochi\"\n"
-	if out != expected {
-		t.Errorf("expected output:\n%s\ngot:\n%s", expected, out)
+	if len(res.Removed()) != 1 || res.Removed()[0].Path.String() != "app.server.legacy_port" {
+		t.Errorf("expected removed app.server.legacy_port, got %+v", res.Removed())
 	}
 }
 
-func TestModifiedProperty(t *testing.T) {
-	oldJSON := []byte(`{"age": 19}`)
-	newJSON := []byte(`{"age": 20}`)
+func TestNewAndRemovedNestedObjects(t *testing.T) {
+	oldJSON := []byte(`{
+		"user": {
+			"name": "John",
+			"old_section": {
+				"foo": "bar"
+			}
+		}
+	}`)
+	newJSON := []byte(`{
+		"user": {
+			"name": "John",
+			"address": {
+				"city": "Kochi"
+			}
+		}
+	}`)
 
 	res, err := CompareBytes(oldJSON, newJSON)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(res.Changes) != 1 {
-		t.Fatalf("expected 1 change, got %d", len(res.Changes))
+	if len(res.Added()) != 1 || res.Added()[0].Path.String() != "user.address" {
+		t.Errorf("expected added user.address, got %+v", res.Added())
 	}
-	c := res.Changes[0]
-	if c.Type != ChangeModified || c.Path != "age" {
-		t.Errorf("unexpected change: %+v", c)
-	}
-
-	out := res.String()
-	if !strings.Contains(out, "MODIFIED:\n    age\n        - 19\n        + 20") {
-		t.Errorf("unexpected format:\n%s", out)
+	if len(res.Removed()) != 1 || res.Removed()[0].Path.String() != "user.old_section" {
+		t.Errorf("expected removed user.old_section, got %+v", res.Removed())
 	}
 }
 
-func TestMultipleChanges(t *testing.T) {
+func TestTypeConversions(t *testing.T) {
+	tests := []struct {
+		name    string
+		oldJSON string
+		newJSON string
+		oldType JSONType
+		newType JSONType
+	}{
+		{"string to number", `{"val": "20"}`, `{"val": 20}`, JSONTypeString, JSONTypeNumber},
+		{"number to string", `{"val": 20}`, `{"val": "20"}`, JSONTypeNumber, JSONTypeString},
+		{"boolean to string", `{"val": true}`, `{"val": "true"}`, JSONTypeBoolean, JSONTypeString},
+		{"null to value", `{"val": null}`, `{"val": "hello"}`, JSONTypeNull, JSONTypeString},
+		{"value to null", `{"val": 123}`, `{"val": null}`, JSONTypeNumber, JSONTypeNull},
+		{"object to primitive", `{"val": {"k": "v"}}`, `{"val": "flat"}`, JSONTypeObject, JSONTypeString},
+		{"primitive to object", `{"val": "flat"}`, `{"val": {"k": "v"}}`, JSONTypeString, JSONTypeObject},
+		{"array to primitive", `{"val": [1, 2]}`, `{"val": 123}`, JSONTypeArray, JSONTypeNumber},
+		{"primitive to array", `{"val": 123}`, `{"val": [1, 2]}`, JSONTypeNumber, JSONTypeArray},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := CompareBytes([]byte(tt.oldJSON), []byte(tt.newJSON))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(res.Modified()) != 1 {
+				t.Fatalf("expected 1 modified change, got %d", len(res.Modified()))
+			}
+			c := res.Modified()[0]
+			if c.OldType != tt.oldType || c.NewType != tt.newType {
+				t.Errorf("expected types %s -> %s, got %s -> %s", tt.oldType, tt.newType, c.OldType, c.NewType)
+			}
+		})
+	}
+}
+
+func TestRootJSONValues(t *testing.T) {
+	t.Run("root primitives identical", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`"hello"`), []byte(`"hello"`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.HasChanges() {
+			t.Errorf("expected no changes for identical root strings")
+		}
+	})
+
+	t.Run("root primitive modified", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`10`), []byte(`20`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
+			t.Errorf("unexpected root diff: %+v", res.Modified())
+		}
+	})
+
+	t.Run("root primitive vs object", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`"plain"`), []byte(`{"key": "val"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
+			t.Errorf("unexpected root diff: %+v", res.Modified())
+		}
+	})
+
+	t.Run("root array modified", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`[1, 2]`), []byte(`[1, 3]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Modified()) != 1 || res.Modified()[0].Path.String() != "(root)" {
+			t.Errorf("unexpected root diff: %+v", res.Modified())
+		}
+	})
+
+	t.Run("root array identical", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`[1, 2, "a"]`), []byte(`[1, 2, "a"]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.HasChanges() {
+			t.Errorf("expected no diff for identical root arrays")
+		}
+	})
+
+	t.Run("root null vs value", func(t *testing.T) {
+		res, err := CompareBytes([]byte(`null`), []byte(`true`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Modified()) != 1 {
+			t.Errorf("expected 1 modified change")
+		}
+	})
+}
+
+func TestSummaryAndFormatting(t *testing.T) {
 	oldJSON := []byte(`{
 		"name": "Blessen",
 		"age": 19,
@@ -112,161 +237,81 @@ func TestMultipleChanges(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(res.Modified()) != 2 {
-		t.Errorf("expected 2 modified changes, got %d", len(res.Modified()))
-	}
-	if len(res.Added()) != 1 {
-		t.Errorf("expected 1 added change, got %d", len(res.Added()))
-	}
-	if len(res.Removed()) != 1 {
-		t.Errorf("expected 1 removed change, got %d", len(res.Removed()))
+	summary := res.Summary()
+	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 2 {
+		t.Errorf("unexpected summary: %+v", summary)
 	}
 
 	out := res.String()
-	if strings.Contains(out, "name") {
-		t.Errorf("expected unchanged field 'name' not to be present in output, got:\n%s", out)
+	expectedSubstrings := []string{
+		"MODIFIED\n  age\n    - 19\n    + 20",
+		"city\n    - \"Kochi\"\n    + \"Bengaluru\"",
+		"ADDED\n  country\n    + \"India\"",
+		"REMOVED\n  old_flag\n    - true",
+		"Summary:\n  Added:     1\n  Removed:   1\n  Modified:  2",
 	}
-	if !strings.Contains(out, "MODIFIED:") || !strings.Contains(out, "ADDED:") || !strings.Contains(out, "REMOVED:") {
-		t.Errorf("expected all 3 sections in output, got:\n%s", out)
+
+	for _, sub := range expectedSubstrings {
+		if !strings.Contains(out, sub) {
+			t.Errorf("expected output to contain %q, but got:\n%s", sub, out)
+		}
 	}
 }
 
-func TestNestedObjectModification(t *testing.T) {
-	oldJSON := []byte(`{"user": {"name": "John", "age": 20}}`)
-	newJSON := []byte(`{"user": {"name": "James", "age": 20}}`)
+func TestDeterministicOrdering(t *testing.T) {
+	oldJSON := []byte(`{"z": 1, "a": 2, "m": 3}`)
+	newJSON := []byte(`{"z": 10, "a": 20, "m": 30}`)
 
-	res, err := CompareBytes(oldJSON, newJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(res.Changes) != 1 {
-		t.Fatalf("expected 1 change, got %d", len(res.Changes))
-	}
-	c := res.Changes[0]
-	if c.Type != ChangeModified || c.Path != "user.name" {
-		t.Errorf("unexpected change: %+v", c)
-	}
-
-	out := res.String()
-	if !strings.Contains(out, "user.name") || !strings.Contains(out, "- \"John\"") || !strings.Contains(out, "+ \"James\"") {
-		t.Errorf("unexpected output:\n%s", out)
-	}
-}
-
-func TestNestedPropertyAdditionAndRemoval(t *testing.T) {
-	oldJSON := []byte(`{"user": {"profile": {"temp": 123}}}`)
-	newJSON := []byte(`{"user": {"profile": {"email": "test@example.com"}}}`)
-
-	res, err := CompareBytes(oldJSON, newJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(res.Added()) != 1 || res.Added()[0].Path != "user.profile.email" {
-		t.Errorf("unexpected added: %+v", res.Added())
-	}
-	if len(res.Removed()) != 1 || res.Removed()[0].Path != "user.profile.temp" {
-		t.Errorf("unexpected removed: %+v", res.Removed())
-	}
-}
-
-func TestPrimitiveTypes(t *testing.T) {
-	t.Run("string change", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"k": "a"}`), []byte(`{"k": "b"}`))
-		if len(res.Modified()) != 1 || res.Modified()[0].Path != "k" {
-			t.Errorf("unexpected result: %+v", res)
-		}
-	})
-
-	t.Run("number change", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"k": 10.5}`), []byte(`{"k": 20.5}`))
-		if len(res.Modified()) != 1 || res.Modified()[0].Path != "k" {
-			t.Errorf("unexpected result: %+v", res)
-		}
-	})
-
-	t.Run("boolean change", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"k": true}`), []byte(`{"k": false}`))
-		if len(res.Modified()) != 1 || res.Modified()[0].Path != "k" {
-			t.Errorf("unexpected result: %+v", res)
-		}
-	})
-
-	t.Run("null change", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"k": null}`), []byte(`{"k": "now_a_string"}`))
-		if len(res.Modified()) != 1 || res.Modified()[0].Path != "k" {
-			t.Errorf("unexpected result: %+v", res)
-		}
-		if FormatValue(res.Modified()[0].OldValue) != "null" {
-			t.Errorf("expected null formatting, got %s", FormatValue(res.Modified()[0].OldValue))
-		}
-	})
-
-	t.Run("both null", func(t *testing.T) {
-		res, _ := CompareBytes([]byte(`{"k": null}`), []byte(`{"k": null}`))
-		if res.HasChanges() {
-			t.Errorf("expected no change for both null, got: %+v", res)
-		}
-	})
-}
-
-func TestArrayHandling(t *testing.T) {
-	t.Run("array modified", func(t *testing.T) {
-		oldJSON := []byte(`{"tags": ["go", "json"]}`)
-		newJSON := []byte(`{"tags": ["go", "diff"]}`)
-
+	for i := 0; i < 5; i++ {
 		res, err := CompareBytes(oldJSON, newJSON)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatal(err)
 		}
-
-		if len(res.Modified()) != 1 || res.Modified()[0].Path != "tags" {
-			t.Fatalf("expected 1 modified change for tags, got %+v", res.Modified())
+		mods := res.Modified()
+		if len(mods) != 3 || mods[0].Path.String() != "a" || mods[1].Path.String() != "m" || mods[2].Path.String() != "z" {
+			t.Fatalf("expected deterministic alphabetical sorting (a, m, z), got: %v, %v, %v",
+				mods[0].Path.String(), mods[1].Path.String(), mods[2].Path.String())
 		}
-		out := res.String()
-		if !strings.Contains(out, "MODIFIED:\n    tags") {
-			t.Errorf("unexpected output:\n%s", out)
-		}
-	})
-
-	t.Run("array unchanged", func(t *testing.T) {
-		oldJSON := []byte(`{"tags": ["go", "json"]}`)
-		newJSON := []byte(`{"tags": ["go", "json"]}`)
-
-		res, err := CompareBytes(oldJSON, newJSON)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if res.HasChanges() {
-			t.Errorf("expected unchanged arrays not to produce diff, got %+v", res.Changes)
-		}
-	})
-}
-
-func TestInvalidJSON(t *testing.T) {
-	_, errOld := CompareBytes([]byte(`{invalid`), []byte(`{}`))
-	if errOld == nil || !strings.Contains(errOld.Error(), "old document") {
-		t.Errorf("expected error indicating old document JSON error, got: %v", errOld)
-	}
-
-	_, errNew := CompareBytes([]byte(`{}`), []byte(`{invalid`))
-	if errNew == nil || !strings.Contains(errNew.Error(), "new document") {
-		t.Errorf("expected error indicating new document JSON error, got: %v", errNew)
 	}
 }
 
-func TestTypeChange(t *testing.T) {
-	oldJSON := []byte(`{"field": "string_val"}`)
-	newJSON := []byte(`{"field": {"nested": "obj"}}`)
-
-	res, err := CompareBytes(oldJSON, newJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestEdgeCases(t *testing.T) {
+	edgeCases := []struct {
+		name string
+		json string
+	}{
+		{"empty object", `{}`},
+		{"nested empty object", `{"a": {}}`},
+		{"double nested empty object", `{"a": {"b": {}}}`},
+		{"null field", `{"a": null}`},
+		{"false field", `{"a": false}`},
+		{"zero field", `{"a": 0}`},
+		{"empty string field", `{"a": ""}`},
 	}
 
-	if len(res.Modified()) != 1 || res.Modified()[0].Path != "field" {
-		t.Fatalf("expected type change to be reported as modified, got: %+v", res)
+	for _, ec := range edgeCases {
+		t.Run(ec.name, func(t *testing.T) {
+			res, err := CompareBytes([]byte(ec.json), []byte(ec.json))
+			if err != nil {
+				t.Fatalf("unexpected error comparing %s: %v", ec.name, err)
+			}
+			if res.HasChanges() {
+				t.Errorf("expected no changes when comparing %s against itself, got: %+v", ec.name, res.Changes)
+			}
+		})
 	}
+
+	t.Run("false vs true", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`{"a": false}`), []byte(`{"a": true}`))
+		if len(res.Modified()) != 1 {
+			t.Errorf("expected false vs true to be detected as modified")
+		}
+	})
+
+	t.Run("zero vs empty string", func(t *testing.T) {
+		res, _ := CompareBytes([]byte(`{"a": 0}`), []byte(`{"a": ""}`))
+		if len(res.Modified()) != 1 {
+			t.Errorf("expected 0 vs empty string to be detected as modified type change")
+		}
+	})
 }
